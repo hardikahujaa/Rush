@@ -8,6 +8,13 @@
       "when": 1787610164332,
       "tag": "0000_ambitious_ulik",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1787610378836,
+      "tag": "0001_yummy_squadron_supreme",
+      "breakpoints": true
     }
   ]
 }

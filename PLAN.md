@@ -220,7 +220,7 @@ SUPABASE_SERVICE_ROLE_KEY="eyJ..."
 
 ---
 
-### ☐ T11 🟡 — Seed data
+### ☑ T11 🟡 — Seed data
 
 **Prompt:**
 
@@ -231,7 +231,7 @@ SUPABASE_SERVICE_ROLE_KEY="eyJ..."
 
 ---
 
-### ☐ T12 🟢 — Draw the ER diagram
+### ☑ T12 🟢 — Draw the ER diagram
 
 **Prompt:**
 

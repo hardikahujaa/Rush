@@ -164,8 +164,18 @@ export const seats = pgTable(
      * Postgres reads every seat row of every event to answer it.
      */
     index("seats_event_status").on(t.eventId, t.status),
-    // A physical seat exists once. Guards the seed script and any future import.
-    uniqueIndex("seats_unique_position").on(t.eventId, t.rowLabel, t.seatNo),
+    /**
+     * A physical seat exists once. Row labels are scoped to their SECTION, not
+     * to the event - real venues number "Row A, seat 1" separately in Front,
+     * Middle and Rear, so section_id has to be part of the key or the second
+     * section would collide with the first.
+     */
+    uniqueIndex("seats_unique_position").on(
+      t.eventId,
+      t.sectionId,
+      t.rowLabel,
+      t.seatNo,
+    ),
   ],
 );
 
