@@ -20,7 +20,7 @@
 
 ## PHASE 0 — Setup (do this before touching code)
 
-### ☐ T00 — Accounts
+### ☑ T00 — Accounts
 Sign up for all of these first so you never get blocked mid-session. All free unless noted.
 
 | Service | URL | Note |
@@ -37,7 +37,7 @@ Sign up for all of these first so you never get blocked mid-session. All free un
 
 ---
 
-### ☐ T01 — Install Claude Code (Windows, native — no WSL needed)
+### ☑ T01 — Install Claude Code (Windows, native — no WSL needed)
 
 Open **PowerShell** and run:
 
@@ -79,7 +79,7 @@ Run `claude` in any folder and try these:
 
 ## PHASE 1 — Foundation & first deploy
 
-### ☐ T03 🟢 — Create the Next.js project
+### ☑ T03 🟢 — Create the Next.js project
 
 In PowerShell, in a folder like `C:\projects`:
 
@@ -130,7 +130,7 @@ git push -u origin main
 
 ---
 
-### ☐ T06 🟡 — Give Claude Code its project brain
+### ☑ T06 🟡 — Give Claude Code its project brain
 
 Copy this `PLAN.md` into your repo root. Then start Claude Code in the project folder and run `/init`.
 
@@ -144,7 +144,7 @@ Then, **prompt:**
 
 ---
 
-### ☐ T07 🟢 — Install the UI toolkit
+### ☑ T07 🟢 — Install the UI toolkit
 
 **Prompt:**
 
