@@ -1,0 +1,54 @@
+import { drizzle } from "drizzle-orm/postgres-js";
+import postgres from "postgres";
+
+import * as schema from "./schema";
+
+/**
+ * The database client.
+ *
+ * Two settings here are not optional, and both exist because we connect through
+ * Supabase's TRANSACTION POOLER (port 6543) rather than straight to Postgres:
+ *
+ * `prepare: false`
+ *   A prepared statement is Postgres caching a query plan under a name, so
+ *   sending it again is cheap. That name lives on one backend connection. The
+ *   transaction pooler hands your next query to whichever connection is free, so
+ *   the name is very likely missing there and you get a confusing "prepared
+ *   statement s1 does not exist". Turning them off is the price of pooling.
+ *
+ * `max: 1` in serverless
+ *   Each Vercel function instance is its own tiny process. Ten instances holding
+ *   ten connections each is a hundred connections to a database that allows far
+ *   fewer. One connection per instance, returned to the pooler immediately, is
+ *   what scales.
+ *
+ * The `globalThis` caching below is a development-only concern: Next.js hot
+ * reload re-evaluates this module on every save, and without the cache each save
+ * would open a fresh pool and leak the previous one until you exhausted the
+ * database.
+ */
+const connectionString = process.env.DATABASE_URL;
+
+if (!connectionString) {
+  throw new Error(
+    "DATABASE_URL is not set. Copy .env.example to .env.local and fill it in.",
+  );
+}
+
+const globalForDb = globalThis as unknown as {
+  conn: postgres.Sql | undefined;
+};
+
+const conn =
+  globalForDb.conn ??
+  postgres(connectionString, {
+    prepare: false,
+    max: process.env.NODE_ENV === "production" ? 1 : 5,
+  });
+
+if (process.env.NODE_ENV !== "production") globalForDb.conn = conn;
+
+export const db = drizzle(conn, { schema });
+
+export type Db = typeof db;
+export { schema };

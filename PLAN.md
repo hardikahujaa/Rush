@@ -99,7 +99,7 @@ npm run dev
 
 ---
 
-### ☐ T04 🟢 — Push to GitHub
+### ☑ T04 🟢 — Push to GitHub
 
 ```powershell
 git init
@@ -177,7 +177,7 @@ SUPABASE_SERVICE_ROLE_KEY="eyJ..."
 
 ---
 
-### ☐ T09 🔴 — The database schema
+### ☑ T09 🔴 — The database schema
 
 **Prompt (use Plan Mode):**
 
@@ -201,7 +201,7 @@ SUPABASE_SERVICE_ROLE_KEY="eyJ..."
 
 ---
 
-### ☐ T10 🟡 — Push the schema and add the safety constraints
+### ☑ T10 🟡 — Push the schema and add the safety constraints
 
 **Prompt:**
 
