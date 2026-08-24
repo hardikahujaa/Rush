@@ -244,13 +244,17 @@ SUPABASE_SERVICE_ROLE_KEY="eyJ..."
 
 ## PHASE 3 — Authentication
 
-### ☐ T13 🔴 — Supabase Auth wiring
+### ☑ T13 🔴 — Supabase Auth wiring
 
 **Prompt (Plan Mode):**
 
-> Set up Supabase Auth using `@supabase/ssr`. Create the browser client, the server client, and `proxy.ts` at the project root for session refresh. Note: this project is Next.js 16, where the middleware file is named `proxy.ts`, not `middleware.ts`. Then explain the difference between a server component and a client component, and why auth needs both clients.
+> Set up Supabase Auth using `@supabase/ssr`. Create the browser client, the server client, and `proxy.ts` at the project root for session refresh.
 
-**Verify:** `npm run dev` runs without errors.
+> Note: this project is Next.js 16, where the middleware file is named `proxy.ts`, not `middleware.ts`. Then explain the difference between a server component and a client component, and why auth needs both clients.
+
+> ⚠️ **CORRECTION (verified against Next 16.3.2 bundled docs + a runtime test):** `proxy.ts` does **not** belong at the project root in this repo. Next resolves it in the directory that *contains* `app`, scanned non-recursively — and we use `src/app`, so it must be **`src/proxy.ts`**. At the root it is silently never loaded: `next build` succeeds, `next dev` starts, `tsc` passes, and every single request skips it. Confirm it is wired by looking for `f Proxy (Middleware)` in the `npm run build` route summary — NOT by checking `middleware-manifest.json`, which tracks edge middleware and stays empty regardless.
+
+**Verify:** `npm run build` prints `f Proxy (Middleware)` in the route summary. (PLAN.md originally said "npm run dev runs without errors" — that passes even when the proxy is never loaded, so it does not actually check anything.)
 **Commit:** `feat: supabase auth clients`
 
 ---

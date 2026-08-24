@@ -48,8 +48,11 @@ src/
     index.ts            db client
     queries/            all query logic
     seed.ts
-  lib/                  auth.ts, redis.ts, stripe.ts, utils.ts
-proxy.ts                root — session refresh + route protection (NOT middleware.ts)
+  lib/
+    supabase/           client.ts (browser), server.ts, env.ts
+    auth.ts, redis.ts, stripe.ts, qr.ts, utils.ts
+  proxy.ts              session refresh + route protection.
+                        NOT middleware.ts, and NOT the repo root — see below.
 docs/                   erd.md, architecture notes
 scripts/                race-test.ts and other one-off scripts
 loadtest/               k6 scripts
@@ -76,9 +79,20 @@ loadtest/               k6 scripts
 
 Most tutorials and training data predate these. Do not trust memory here.
 
-- **`middleware.ts` is now `proxy.ts`**, at the project root. The exported function must
-  be named `proxy`. It runs on the **Node.js runtime only** — the edge runtime is not
-  supported in `proxy`, and the runtime cannot be configured.
+- **`middleware.ts` is now `proxy.ts`, and it lives at `src/proxy.ts` — NOT the repo
+  root.** Next resolves it in the directory *containing* `app`, scanned non-recursively.
+  This project uses `src/app`, so the root is the wrong place. PLAN.md T13 says "project
+  root" and is wrong for a `src/` layout. Getting this wrong fails **silently**: build
+  succeeds, dev starts, typecheck passes, and every request skips the file.
+  - To confirm it is wired: `npm run build` prints `ƒ Proxy (Middleware)` in the route
+    summary. Do **not** check `.next/server/middleware-manifest.json` — that tracks
+    *edge* middleware and stays `{}` even when the proxy is working, because a Next 16
+    proxy is Node-runtime only.
+  - The exported function must be named `proxy`. Edge runtime is unsupported and the
+    runtime cannot be configured.
+  - Proxy is an **optimistic** gate. Next's own docs say it "should not be used as a
+    full session management or authorization solution" — always enforce authorisation
+    again in the page or route handler, with RLS underneath.
 - **Request APIs are async.** `cookies()`, `headers()`, `draftMode()`, and `params` /
   `searchParams` in `page.tsx`, `layout.tsx` and `route.ts` are all Promises. You must
   `await` them. Synchronous access was removed in 16.
@@ -110,6 +124,22 @@ Most tutorials and training data predate these. Do not trust memory here.
   `stripeEventId`. Stripe retries; reprocessing must be a no-op.
 - **Never trust the client for price.** Always recompute totals server-side from the
   `sections` table.
+
+## Auth rules
+
+- **Never call `supabase.auth.getSession()` for an authorization decision.** It decodes
+  the cookie without verifying the signature, and cookies are client-controlled. Use
+  `getVerifiedClaims()` from `src/lib/supabase/server.ts`, which wraps `getClaims()` and
+  verifies the JWT against the project signing keys.
+- Two deliberately distinct names, so a wrong import cannot silently return "no session":
+  `createSupabaseBrowserClient()` (client components) and `createSupabaseServerClient()`
+  (server). The server one is wrapped in React `cache()` so one request shares one client.
+- **A route handler that uses `createSupabaseServerClient()` must never be cached** — no
+  `s-maxage`, no `revalidate`, no `export const revalidate`. Supabase hands the library
+  `Cache-Control: private, no-store` headers alongside refreshed session cookies, and
+  there is no way to apply them from `cookies()`. A cached response carrying a
+  `Set-Cookie` session token would serve one user's session to the next visitor.
+  Route handlers are dynamic by default; the rule is about not opting out.
 
 ## Safety
 
