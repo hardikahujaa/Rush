@@ -27,12 +27,36 @@ import {
  * The exported function must be named `proxy`. It runs on the Node.js runtime;
  * the edge runtime is unsupported here and cannot be configured.
  *
- * Its job in T13 is keeping the session alive. Supabase access tokens are
- * short-lived and get traded for fresh ones using a refresh token. Server
- * Components cannot write cookies - their response headers are already sealed by
- * the time they run - so if the refresh did not happen here, the new token would
- * have nowhere to go and users would be logged out at random.
+ * TWO JOBS:
+ *   1. Keep the session alive. Supabase access tokens are short-lived and get
+ *      traded for fresh ones. Server Components cannot write cookies - their
+ *      response headers are sealed by the time they run - so without the refresh
+ *      happening here the new token would have nowhere to go and users would be
+ *      logged out at random.
+ *   2. Turn obviously unauthorised requests away before any page renders.
  */
+
+/** Roles as they appear in the `app_metadata.role` claim. */
+type Role = "buyer" | "organizer" | "staff";
+
+/**
+ * Route protection rules, most specific first.
+ *
+ * `roles: null` means "any signed-in user will do".
+ */
+const RULES: { prefix: string; roles: Role[] | null }[] = [
+  { prefix: "/organizer", roles: ["organizer"] },
+  { prefix: "/scan", roles: ["staff", "organizer"] },
+  { prefix: "/dashboard", roles: null },
+  { prefix: "/tickets", roles: null },
+];
+
+function ruleFor(pathname: string) {
+  return RULES.find(
+    (r) => pathname === r.prefix || pathname.startsWith(`${r.prefix}/`),
+  );
+}
+
 export async function proxy(request: NextRequest) {
   /**
    * Cookies are COLLECTED, not written straight onto a response.
@@ -44,8 +68,7 @@ export async function proxy(request: NextRequest) {
    * throws away whatever the previous call had already set.
    *
    * Collecting them means the response is built exactly once, from the complete
-   * set, and any response we choose to return (including a redirect in T15) can
-   * be given the same cookies.
+   * set, and every response below - including the redirects - carries them.
    */
   const pendingCookies: {
     name: string;
@@ -94,29 +117,96 @@ export async function proxy(request: NextRequest) {
    * decodes the cookie WITHOUT verifying its signature, and Supabase's own docs
    * say its result must not be trusted server-side, because cookies are
    * client-controlled and can be forged. `getClaims()` verifies the JWT against
-   * the project's signing keys first.
+   * the project's signing keys first - which is what makes the role check below
+   * safe to base on it.
    */
   const { data, error } = await supabase.auth.getClaims();
 
-  const response = NextResponse.next({ request });
-  applyPending(response, pendingCookies, pendingHeaders);
+  const pathname = request.nextUrl.pathname;
+  const rule = ruleFor(pathname);
 
   /**
-   * T15 will add role-based redirects here, using `data?.claims.sub` as the
-   * verified user id. Any redirect MUST be passed through `applyPending` too,
-   * or the refreshed session is lost on exactly the request that redirects:
+   * Stamp the path onto the REQUEST so server components can read it.
    *
-   *   const redirect = NextResponse.redirect(url)
-   *   applyPending(redirect, pendingCookies, pendingHeaders)
-   *   return redirect
+   * A server component cannot see its own URL. src/lib/auth.ts reads this header
+   * to build an accurate `?next=` when it has to send someone to sign in.
    *
-   * `error` is captured rather than ignored so T15 can distinguish "no session"
-   * from "the auth service is unreachable" - those deserve different behaviour,
-   * and re-calling getClaims() to find out would cost another round trip.
+   * `set` (not `append`) is deliberate: it REPLACES any `x-pathname` the caller
+   * sent us. A client can put whatever it likes in a request header, so if this
+   * appended instead, a forged value would sit alongside ours in a header our
+   * own code then trusts.
    */
-  void data;
-  void error;
+  const requestHeaders = new Headers(request.headers);
+  requestHeaders.set("x-pathname", pathname);
+  const nextResponseInit = { request: { headers: requestHeaders } };
 
+  if (rule) {
+    const claims = data?.claims;
+    const signedIn = Boolean(claims?.sub) && !error;
+
+    if (!signedIn) {
+      // Fail CLOSED. If the auth service was unreachable we genuinely do not
+      // know who this is, and the safe answer to "may I see the dashboard?"
+      // when we cannot tell is no.
+      return redirectTo(
+        request,
+        `/login?next=${encodeURIComponent(pathname)}`,
+        pendingCookies,
+        pendingHeaders,
+      );
+    }
+
+    if (rule.roles) {
+      const appMetadata = claims?.app_metadata as
+        | { role?: string }
+        | undefined;
+      const role = appMetadata?.role as Role | undefined;
+
+      /**
+       * A token with no role claim at all is NOT treated as a denial.
+       *
+       * That happens for tokens minted before the role sync existed, and for the
+       * hour after someone is promoted but before their token refreshes. Denying
+       * would lock a legitimately promoted organizer out of their own dashboard
+       * until their token happened to roll over. Letting it through costs
+       * nothing, because requireRole() in the page reads the role from the
+       * database and is the check that actually decides.
+       */
+      if (role && !rule.roles.includes(role)) {
+        return redirectTo(
+          request,
+          `/forbidden?from=${encodeURIComponent(pathname)}`,
+          pendingCookies,
+          pendingHeaders,
+        );
+      }
+    }
+  }
+
+  const response = NextResponse.next(nextResponseInit);
+  applyPending(response, pendingCookies, pendingHeaders);
+  return response;
+}
+
+function redirectTo(
+  request: NextRequest,
+  to: string,
+  cookiesToSet: { name: string; value: string; options: Record<string, unknown> }[],
+  headers: Record<string, string>,
+) {
+  /**
+   * `new URL(to, request.nextUrl)` resolves against THIS origin, so a redirect
+   * can never be pointed at another site even if `to` were ever built from
+   * request data.
+   */
+  const response = NextResponse.redirect(new URL(to, request.nextUrl));
+  /**
+   * The refreshed session must be carried onto the redirect as well. Returning a
+   * bare redirect here would discard the new cookies on exactly the requests
+   * that redirect - so a user whose token refreshed while being bounced to the
+   * login page would arrive there freshly signed out.
+   */
+  applyPending(response, cookiesToSet, headers);
   return response;
 }
 
@@ -141,16 +231,15 @@ export const config = {
      * The `[^/]+\.ext$` shape is load-bearing. The commonly copy-pasted version
      * uses `.*\.ext$`, which excludes any path whose last segment ends in that
      * extension - including nested, user-controlled ones. Under that pattern a
-     * request to `/organizer/report.png` skips this file entirely, so once T15
-     * adds role checks here, an attacker picks their own path and walks around
-     * the gate. `[^/]+` cannot cross a slash, so only real top-level assets like
-     * `/next.svg` and `/robots.txt` are exempt.
+     * request to `/organizer/report.png` skips this file entirely and walks
+     * straight around the role check above. `[^/]+` cannot cross a slash, so only
+     * real top-level assets like `/next.svg` and `/robots.txt` are exempt.
      *
      * Even so, this is an optimistic gate. Next's own docs are explicit that
      * proxy "should not be used as a full session management or authorization
-     * solution" - so T15 must ALSO check authorisation inside the page or route
-     * handler itself, with row level security underneath. This is the fast path,
-     * never the only one.
+     * solution", which is why every protected page ALSO calls requireUser() or
+     * requireRole() from src/lib/auth.ts. This is the fast path, never the only
+     * one.
      */
     "/((?!_next/static|_next/image|[^/]+\\.(?:svg|png|jpg|jpeg|gif|webp|avif|ico|txt|xml|webmanifest|woff2?)$).*)",
   ],

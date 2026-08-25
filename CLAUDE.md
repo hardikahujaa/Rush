@@ -134,6 +134,23 @@ Most tutorials and training data predate these. Do not trust memory here.
 - Two deliberately distinct names, so a wrong import cannot silently return "no session":
   `createSupabaseBrowserClient()` (client components) and `createSupabaseServerClient()`
   (server). The server one is wrapped in React `cache()` so one request shares one client.
+- **Authorization is TWO layers, and both are required.**
+  1. `src/proxy.ts` — the fast, optimistic gate. Reads the role from
+     `app_metadata.role` in the *verified* JWT, so it costs no database query.
+     Signed-out → `/login?next=…`; wrong role → `/forbidden`.
+  2. `requireUser()` / `requireRole()` from `src/lib/auth.ts`, called at the top of
+     **every** protected page and route handler. This reads the role from the `users`
+     table and is the check that actually enforces the rule.
+  Layer 2 is not optional. A JWT is a snapshot: revoke someone's role and their existing
+  token still claims it for up to an hour. Layer 2 is also what survives a matcher typo —
+  it runs inside the thing being protected, so nothing can route around it.
+- **Roles live in `public.users.role`** and are mirrored into `auth.users.raw_app_meta_data`
+  by the trigger in migration 0004, which is what puts them in the JWT. Use
+  `app_metadata`, never `user_metadata` — the latter is writable by the logged-in user,
+  so a role stored there could be self-granted.
+- `src/proxy.ts` stamps `x-pathname` on the request so server components can build an
+  accurate `?next=`. It uses `set`, not `append`, so a client-supplied value cannot survive.
+- Verify the guards with `node --env-file=.env.local scripts/rbac-test.mjs`.
 - **A route handler that uses `createSupabaseServerClient()` must never be cached** — no
   `s-maxage`, no `revalidate`, no `export const revalidate`. Supabase hands the library
   `Cache-Control: private, no-store` headers alongside refreshed session cookies, and

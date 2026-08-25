@@ -270,7 +270,7 @@ SUPABASE_SERVICE_ROLE_KEY="eyJ..."
 
 ---
 
-### ☐ T15 🟡 — Route protection and roles
+### ☑ T15 🟡 — Route protection and roles
 
 **Prompt:**
 
