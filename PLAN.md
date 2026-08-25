@@ -259,7 +259,7 @@ SUPABASE_SERVICE_ROLE_KEY="eyJ..."
 
 ---
 
-### ☐ T14 🟡 — Login and signup pages
+### ☑ T14 🟡 — Login and signup pages
 
 **Prompt:**
 

@@ -15,6 +15,20 @@
       "when": 1787610378836,
       "tag": "0001_yummy_squadron_supreme",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1787648349023,
+      "tag": "0002_auth_user_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1787648783375,
+      "tag": "0003_auth_user_delete_sync",
+      "breakpoints": true
     }
   ]
 }
