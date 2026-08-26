@@ -1,3 +1,4 @@
+import { Footer } from "@/components/layout/footer/footer";
 import { EventRail } from "@/components/home/event-rail";
 import { Hero } from "@/components/home/hero";
 import { QuickFilters } from "@/components/home/quick-filters";
@@ -65,9 +66,7 @@ export default function HomePage() {
 
       <Upcoming />
 
-      {/* Breathing room at the end of the scroll. The footer returns in a later
-          phase; ending flush against the viewport reads as a truncated page. */}
-      <div className="h-24" />
+      <Footer />
     </>
   );
 }
