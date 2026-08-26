@@ -22,6 +22,11 @@
   --color-chart-4: var(--chart-4);
   --color-chart-3: var(--chart-3);
   --color-chart-2: var(--chart-2);
+  --color-brand-2: var(--brand-2);
+  --color-seat-available: var(--seat-available);
+  --color-seat-held: var(--seat-held);
+  --color-seat-sold: var(--seat-sold);
+  --color-live: var(--live);
   --color-chart-1: var(--chart-1);
   --color-seat-available: var(--seat-available);
   --color-seat-held: var(--seat-held);
@@ -88,48 +93,58 @@
 }
 
 .dark {
-  /* RUSH dark palette.
-     The ground is not a pure grey: every neutral carries a small amount of
-     chroma at hue 285 (the accent's hue), so the darks read as chosen rather
-     than as the default #111. The accent is an electric violet, deliberately
-     kept clear of the amber and red the seat map uses for held and sold - a
-     brand colour that collided with a status colour would make the seat map
-     ambiguous, which is the one screen that must never be. */
-  --background: oklch(0.147 0.014 285);
-  --foreground: oklch(0.975 0.004 285);
-  --card: oklch(0.191 0.017 285);
-  --card-foreground: oklch(0.975 0.004 285);
-  --popover: oklch(0.191 0.017 285);
-  --popover-foreground: oklch(0.975 0.004 285);
-  --primary: oklch(0.646 0.222 292);
-  --primary-foreground: oklch(0.99 0.005 285);
-  --secondary: oklch(0.262 0.021 285);
-  --secondary-foreground: oklch(0.975 0.004 285);
-  --muted: oklch(0.245 0.019 285);
-  --muted-foreground: oklch(0.702 0.024 285);
-  --accent: oklch(0.286 0.036 288);
-  --accent-foreground: oklch(0.975 0.004 285);
-  --destructive: oklch(0.638 0.208 25.5);
-  --border: oklch(1 0 0 / 11%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.646 0.222 292);
-  --chart-1: oklch(0.646 0.222 292);
-  --chart-2: oklch(0.72 0.16 200);
-  --chart-3: oklch(0.78 0.15 85);
+  /* RUSH — deep-space duotone.
+     Two brand hues, not one: violet (292) and cyan (205). A single accent on a
+     dark ground reads as a template with the hue swapped; a duotone gives the
+     aurora somewhere to travel and lets emphasis shift without changing value.
+     Neutrals sit at hue 280 with real chroma so nothing is a flat grey. */
+  --background: oklch(0.113 0.019 280);
+  --foreground: oklch(0.977 0.005 280);
+  --card: oklch(0.163 0.023 281);
+  --card-foreground: oklch(0.977 0.005 280);
+  --popover: oklch(0.152 0.024 281);
+  --popover-foreground: oklch(0.977 0.005 280);
+  --primary: oklch(0.652 0.238 292);
+  --primary-foreground: oklch(0.99 0.005 280);
+  --secondary: oklch(0.238 0.028 282);
+  --secondary-foreground: oklch(0.977 0.005 280);
+  --muted: oklch(0.216 0.024 282);
+  --muted-foreground: oklch(0.715 0.028 282);
+  --accent: oklch(0.268 0.042 288);
+  --accent-foreground: oklch(0.977 0.005 280);
+  --destructive: oklch(0.637 0.212 25.5);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 14%);
+  --ring: oklch(0.652 0.238 292);
+  --chart-1: oklch(0.652 0.238 292);
+  --chart-2: oklch(0.78 0.148 205);
+  --chart-3: oklch(0.79 0.16 75);
   --chart-4: oklch(0.66 0.19 15);
-  --chart-5: oklch(0.7 0.16 150);
-  --sidebar: oklch(0.191 0.017 285);
-  --sidebar-foreground: oklch(0.975 0.004 285);
-  --sidebar-primary: oklch(0.646 0.222 292);
-  --sidebar-primary-foreground: oklch(0.99 0.005 285);
-  --sidebar-accent: oklch(0.262 0.021 285);
-  --sidebar-accent-foreground: oklch(0.975 0.004 285);
-  --sidebar-border: oklch(1 0 0 / 11%);
-  --sidebar-ring: oklch(0.646 0.222 292);
+  --chart-5: oklch(0.74 0.19 150);
+  --sidebar: oklch(0.152 0.024 281);
+  --sidebar-foreground: oklch(0.977 0.005 280);
+  --sidebar-primary: oklch(0.652 0.238 292);
+  --sidebar-primary-foreground: oklch(0.99 0.005 280);
+  --sidebar-accent: oklch(0.238 0.028 282);
+  --sidebar-accent-foreground: oklch(0.977 0.005 280);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.652 0.238 292);
 
-  /* Semantic status colours. Separate from the accent on purpose: these mean
-     something specific and must stay recognisable even if the brand changes. */
-  --seat-available: oklch(0.66 0.02 285);
+  /* Second brand hue. Used for the aurora, gradient text and data accents. */
+  --brand-2: oklch(0.78 0.148 205);
+
+  /* Glass. Values follow the glassmorphism spec: 10-30% translucency, 10-20px
+     blur, 1px light border. --glass-hi is the top-edge highlight that makes a
+     panel read as a lit surface rather than a grey rectangle. */
+  --glass-bg: oklch(1 0 0 / 6%);
+  --glass-bg-strong: oklch(1 0 0 / 9%);
+  --glass-border: oklch(1 0 0 / 12%);
+  --glass-hi: oklch(1 0 0 / 22%);
+  --glass-blur: 16px;
+
+  /* Status. Deliberately separate from the brand hues so the seat map stays
+     unambiguous no matter what the brand does. */
+  --seat-available: oklch(0.66 0.02 282);
   --seat-held: oklch(0.79 0.16 75);
   --seat-sold: oklch(0.52 0.15 25);
   --live: oklch(0.74 0.19 150);
@@ -144,5 +159,119 @@
   }
   html {
     @apply font-sans;
+  }
+}
+/* ─── RUSH surface utilities ───────────────────────────────────────────────
+   Glass panels, the aurora field and its motion. Kept here rather than
+   repeated as long class strings so the treatment stays consistent and can be
+   retuned in one place. */
+
+@layer components {
+  /* A lit translucent panel. The inset top highlight is what separates this
+     from "a dark box with blur" - real glass catches light on its top edge. */
+  .glass {
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border);
+    /* Routed through Tailwind utilities rather than a raw backdrop-filter
+       declaration: Tailwind v4 composes backdrop effects from its own custom
+       properties, and a bare declaration in the components layer is dropped.
+       The arbitrary value keeps --glass-blur live, so the navbar can deepen its
+       blur on scroll by changing one variable. */
+    @apply backdrop-blur-[var(--glass-blur)] backdrop-saturate-150;
+    box-shadow:
+      inset 0 1px 0 0 var(--glass-hi),
+      0 8px 32px -12px oklch(0 0 0 / 55%);
+  }
+
+  .glass-strong {
+    background: var(--glass-bg-strong);
+    border: 1px solid var(--glass-border);
+    @apply backdrop-blur-[24px] backdrop-saturate-150;
+    box-shadow:
+      inset 0 1px 0 0 var(--glass-hi),
+      0 16px 48px -16px oklch(0 0 0 / 65%);
+  }
+
+  /* Duotone text. Applied to one or two words per view, never a paragraph -
+     gradient text cannot be contrast-checked reliably at body size. */
+  .text-duotone {
+    background-image: linear-gradient(
+      100deg,
+      var(--foreground) 0%,
+      var(--primary) 45%,
+      var(--brand-2) 100%
+    );
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  /* A hairline that fades out at both ends. Reads as a light edge catching a
+     surface rather than a ruled line across the page. */
+  .rule-fade {
+    background-image: linear-gradient(
+      90deg,
+      transparent,
+      var(--glass-border) 18%,
+      var(--glass-border) 82%,
+      transparent
+    );
+  }
+}
+
+@layer utilities {
+  /* Hides scrollbars on the horizontal filter rails without disabling scroll. */
+  .no-scrollbar {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Grain. A gradient this large will band on 8-bit displays; a faint noise
+     layer breaks the banding up and is the difference between "gradient" and
+     "lit room". */
+  .grain::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    opacity: 0.035;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+}
+
+/* Aurora drift. Slow enough to be felt rather than watched. */
+@keyframes rush-drift-a {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+  50%      { transform: translate3d(6%, -4%, 0) scale(1.12); }
+}
+@keyframes rush-drift-b {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1.06); }
+  50%      { transform: translate3d(-7%, 5%, 0) scale(0.94); }
+}
+@keyframes rush-drift-c {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(0.98); }
+  50%      { transform: translate3d(4%, 7%, 0) scale(1.1); }
+}
+@keyframes rush-sweep {
+  0%   { transform: translateX(-120%); }
+  100% { transform: translateX(220%); }
+}
+
+.animate-drift-a { animation: rush-drift-a 26s ease-in-out infinite; }
+.animate-drift-b { animation: rush-drift-b 32s ease-in-out infinite; }
+.animate-drift-c { animation: rush-drift-c 38s ease-in-out infinite; }
+.animate-sweep   { animation: rush-sweep 1.1s ease-out; }
+
+/* Ambient motion is decorative by definition, so it is the first thing to go
+   when someone has asked the OS for less of it. */
+@media (prefers-reduced-motion: reduce) {
+  .animate-drift-a,
+  .animate-drift-b,
+  .animate-drift-c,
+  .animate-sweep {
+    animation: none !important;
   }
 }
