@@ -281,7 +281,7 @@ SUPABASE_SERVICE_ROLE_KEY="eyJ..."
 
 ---
 
-### ☐ T16 🟢 — Navbar with auth state
+### ☑ T16 🟢 — Navbar with auth state
 
 **Prompt:**
 
