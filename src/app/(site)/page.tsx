@@ -1,10 +1,73 @@
+import { EventRail } from "@/components/home/event-rail";
+import { Hero } from "@/components/home/hero";
+import { QuickFilters } from "@/components/home/quick-filters";
+import { Upcoming } from "@/components/home/upcoming";
+import {
+  RECOMMENDED,
+  SELLING_FAST,
+  SPOTLIGHT_COMEDY,
+  SPOTLIGHT_MOVIES,
+} from "@/lib/mock-events";
+
 /**
- * Landing page.
+ * Homepage — the VIP Lobby.
  *
- * Emptied in Phase 0. A route still has to resolve here or `/` returns 404 and
- * the RBAC redirect target for signed-out users has nowhere to land, so this is
- * a stub rather than a deleted file. Phase 1 replaces it with the VIP Lobby.
+ * Scroll order is a funnel: what is about to be gone, what suits you, what you
+ * might not have considered, what has not opened yet. Urgency leads because it
+ * is the only section with a deadline attached.
+ *
+ * All rails render MOCK data from src/lib/mock-events.ts. Every component takes
+ * its data as props, so wiring real queries later changes the source, not the
+ * shape.
  */
 export default function HomePage() {
-  return null;
+  return (
+    <>
+      <Hero />
+
+      <QuickFilters />
+
+      <EventRail
+        id="selling-fast"
+        eyebrow="Selling fast"
+        title="Going in minutes, not days"
+        description="Seat counts are the live output of the availability query — held and sold seats are already excluded, so the number is real."
+        events={SELLING_FAST}
+        accentHue={75}
+      />
+
+      <EventRail
+        id="recommended"
+        eyebrow="Recommended for you"
+        title="Near you in Chennai"
+        description="Based on your selected city. Change it from the navbar to see another."
+        events={RECOMMENDED}
+        accentHue={88}
+      />
+
+      <EventRail
+        id="spotlight-comedy"
+        eyebrow="Spotlight"
+        title="Best of comedy"
+        href="/events?category=comedy-theater"
+        events={SPOTLIGHT_COMEDY}
+        accentHue={62}
+      />
+
+      <EventRail
+        id="spotlight-movies"
+        eyebrow="Spotlight"
+        title="Top movies this week"
+        href="/events?category=movies"
+        events={SPOTLIGHT_MOVIES}
+        accentHue={55}
+      />
+
+      <Upcoming />
+
+      {/* Breathing room at the end of the scroll. The footer returns in a later
+          phase; ending flush against the viewport reads as a truncated page. */}
+      <div className="h-24" />
+    </>
+  );
 }

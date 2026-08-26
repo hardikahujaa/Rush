@@ -22,6 +22,13 @@
   --color-chart-4: var(--chart-4);
   --color-chart-3: var(--chart-3);
   --color-chart-2: var(--chart-2);
+  --color-gold: var(--gold);
+  --color-gold-bright: var(--gold-bright);
+  --color-gold-champagne: var(--gold-champagne);
+  --color-gold-deep: var(--gold-deep);
+  --color-seat-held: var(--seat-held);
+  --color-seat-sold: var(--seat-sold);
+  --color-live: var(--live);
   --color-chart-1: var(--chart-1);
   --color-ring: var(--ring);
   --color-input: var(--input);
@@ -84,42 +91,71 @@
 }
 
 .dark {
-  /* Obsidian base. Deliberately zero-chroma after the Phase 0 purge: these are
-     structural tokens only, carrying no brand hue. Phase 1 introduces the
-     Obsidian/Gold palette by giving --primary, --ring and the accents their
-     values here. Every shadcn primitive reads these names, so the structure
-     stays even though the colour is gone. */
-  --background: oklch(0.121 0 0);
-  --foreground: oklch(0.975 0 0);
-  --card: oklch(0.171 0 0);
-  --card-foreground: oklch(0.975 0 0);
-  --popover: oklch(0.161 0 0);
-  --popover-foreground: oklch(0.975 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.21 0 0);
-  --secondary: oklch(0.254 0 0);
-  --secondary-foreground: oklch(0.975 0 0);
-  --muted: oklch(0.229 0 0);
-  --muted-foreground: oklch(0.715 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.975 0 0);
+  /* OBSIDIAN & CHAMPAGNE GOLD.
+     The ground is true black, not a dark grey - the reference is a lit room
+     photographed in the dark, and any lift in the background kills the sense
+     that the gold is the only light source.
+     Gold spans amber #F59E0B to champagne #FFE4B5. Both clear 4.5:1 on black by
+     a wide margin, so gold can carry text as well as decoration. */
+  --background: oklch(0 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.145 0.004 80);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.118 0.004 80);
+  --popover-foreground: oklch(0.985 0 0);
+
+  /* Gold IS the primary. Paired with near-black text, never white - white on
+     champagne is about 1.6:1 and unreadable. */
+  --primary: oklch(0.786 0.153 74);
+  --primary-foreground: oklch(0.12 0.01 60);
+
+  --secondary: oklch(0.22 0.008 75);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.19 0.006 75);
+  --muted-foreground: oklch(0.72 0.014 80);
+  --accent: oklch(0.24 0.012 75);
+  --accent-foreground: oklch(0.985 0 0);
   --destructive: oklch(0.637 0.212 25.5);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 14%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.72 0 0);
-  --chart-3: oklch(0.56 0 0);
-  --chart-4: oklch(0.44 0 0);
-  --chart-5: oklch(0.32 0 0);
-  --sidebar: oklch(0.161 0 0);
-  --sidebar-foreground: oklch(0.975 0 0);
-  --sidebar-primary: oklch(0.922 0 0);
-  --sidebar-primary-foreground: oklch(0.21 0 0);
-  --sidebar-accent: oklch(0.254 0 0);
-  --sidebar-accent-foreground: oklch(0.975 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+  --border: oklch(1 0 0 / 9%);
+  --input: oklch(1 0 0 / 13%);
+  --ring: oklch(0.786 0.153 74);
+
+  --chart-1: oklch(0.786 0.153 74);
+  --chart-2: oklch(0.88 0.09 88);
+  --chart-3: oklch(0.68 0.14 62);
+  --chart-4: oklch(0.6 0.13 50);
+  --chart-5: oklch(0.5 0.1 45);
+
+  --sidebar: oklch(0.118 0.004 80);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.786 0.153 74);
+  --sidebar-primary-foreground: oklch(0.12 0.01 60);
+  --sidebar-accent: oklch(0.22 0.008 75);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(1 0 0 / 9%);
+  --sidebar-ring: oklch(0.786 0.153 74);
+
+  /* The gold ramp, named by role rather than by lightness so usage stays
+     legible at the call site. */
+  --gold: oklch(0.786 0.153 74);          /* #F59E0B core amber        */
+  --gold-bright: oklch(0.86 0.115 82);    /* lit edge                  */
+  --gold-champagne: oklch(0.925 0.055 88);/* #FFE4B5 pale highlight    */
+  --gold-deep: oklch(0.58 0.13 58);       /* shadowed side of the ring */
+
+  /* Dark glass over true black. Kept low: at true black even 8% white reads as
+     a visible panel, and the reference surfaces are barely there. */
+  --glass-bg: oklch(1 0 0 / 4.5%);
+  --glass-border: oklch(1 0 0 / 9%);
+  --glass-hi: oklch(1 0 0 / 14%);
+  --glass-blur: 18px;
+
+  /* Seat status. Held stays gold-adjacent so it belongs to the palette; sold
+     and live keep their own hues because they must never be confused with the
+     brand or with each other. */
+  --seat-available: oklch(0.62 0.01 80);
+  --seat-held: oklch(0.82 0.14 78);
+  --seat-sold: oklch(0.52 0.15 25);
+  --live: oklch(0.74 0.19 150);
 }
 
 @layer base {
@@ -131,5 +167,132 @@
   }
   html {
     @apply font-sans;
+  }
+}
+
+/* ─── VIP Lobby surfaces ───────────────────────────────────────────────────
+   Glass, gold text treatments and the ring lighting used by the hero. Kept
+   here rather than repeated as long class strings so the treatment stays
+   consistent and can be retuned in one place. */
+
+@layer components {
+  /* Dark glass. The inset top highlight is what makes a panel read as a lit
+     surface instead of a slightly-less-black rectangle - at true black that
+     edge is doing most of the work. */
+  .glass {
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border);
+    @apply backdrop-blur-[var(--glass-blur)] backdrop-saturate-125;
+    box-shadow:
+      inset 0 1px 0 0 var(--glass-hi),
+      0 8px 32px -12px oklch(0 0 0 / 90%);
+  }
+
+  /* The navbar's "physical depth": glass surface, a true-black outline so it
+     separates from the lit background, and a hard shadow beneath it. */
+  .glass-nav {
+    background: oklch(0.03 0 0 / 72%);
+    border: 1px solid oklch(0 0 0);
+    @apply backdrop-blur-2xl backdrop-saturate-125;
+    box-shadow:
+      inset 0 1px 0 0 oklch(1 0 0 / 10%),
+      0 1px 0 0 oklch(1 0 0 / 4%),
+      0 18px 50px -12px oklch(0 0 0),
+      0 0 0 1px oklch(0 0 0 / 60%);
+  }
+
+  /* Cool metallic. Silver-white with a faint warm bottom so it sits in the
+     same room as the gold rather than looking pasted on. */
+  .text-metal {
+    background-image: linear-gradient(
+      180deg,
+      oklch(1 0 0) 0%,
+      oklch(0.93 0.004 80) 45%,
+      oklch(0.72 0.012 78) 100%
+    );
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  /* Champagne. Brightest through the middle so the line reads as lit from
+     within, matching the glow in the reference. */
+  .text-champagne {
+    background-image: linear-gradient(
+      178deg,
+      oklch(0.9 0.08 84) 0%,
+      oklch(0.94 0.06 88) 38%,
+      oklch(0.82 0.145 76) 72%,
+      oklch(0.66 0.14 62) 100%
+    );
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  /* Filled gold button. Dark text, never white. */
+  .btn-gold {
+    background-image: linear-gradient(
+      170deg,
+      var(--gold-champagne) 0%,
+      var(--gold) 55%,
+      var(--gold-deep) 100%
+    );
+    color: oklch(0.12 0.01 60);
+    box-shadow:
+      inset 0 1px 0 0 oklch(1 0 0 / 45%),
+      0 0 28px -6px oklch(0.786 0.153 74 / 55%);
+  }
+
+  /* Outlined gold button. */
+  .btn-gold-outline {
+    background: transparent;
+    border: 1px solid oklch(0.786 0.153 74 / 45%);
+    color: var(--gold-champagne);
+  }
+  .btn-gold-outline:hover {
+    border-color: oklch(0.786 0.153 74 / 80%);
+    background: oklch(0.786 0.153 74 / 8%);
+  }
+
+  /* A hairline that fades at both ends - a light edge catching a surface
+     rather than a ruled line across the page. */
+  .rule-fade {
+    background-image: linear-gradient(
+      90deg,
+      transparent,
+      var(--glass-border) 18%,
+      var(--glass-border) 82%,
+      transparent
+    );
+  }
+}
+
+@layer utilities {
+  .no-scrollbar {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Glow behind the champagne headline. A drop-shadow rather than a text-shadow
+     so it follows the glyph outlines instead of the box. */
+  .glow-champagne {
+    filter:
+      drop-shadow(0 0 22px oklch(0.786 0.153 74 / 34%))
+      drop-shadow(0 0 64px oklch(0.786 0.153 74 / 18%));
+  }
+
+  /* Grain. A gradient field this large bands visibly on 8-bit displays; the
+     noise is what makes it read as a lit room rather than a gradient. */
+  .grain::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    opacity: 0.045;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
   }
 }
