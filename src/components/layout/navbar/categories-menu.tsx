@@ -8,7 +8,6 @@ import {
   DropdownMenuContent,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { shatterStore } from "@/lib/shatter-store";
 import { CATEGORIES } from "@/lib/taxonomy";
 
 /**
@@ -26,25 +25,7 @@ import { CATEGORIES } from "@/lib/taxonomy";
 export function CategoriesMenu() {
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger
-        /**
-         * Drives the particle ring in the hero.
-         *
-         * Writes to a module store rather than lifting state: this button and
-         * that canvas are in different subtrees whose only common ancestor is a
-         * server component, and routing a hover boolean through React context
-         * would re-render the navbar and the hero on every pointer crossing.
-         *
-         * Focus mirrors hover so the effect is reachable by keyboard too - an
-         * interaction that only exists on mouseenter simply does not exist for
-         * anyone tabbing through the page.
-         */
-        onMouseEnter={() => shatterStore.set(true)}
-        onMouseLeave={() => shatterStore.set(false)}
-        onFocus={() => shatterStore.set(true)}
-        onBlur={() => shatterStore.set(false)}
-        className="group/cat hidden h-9 items-center gap-1.5 rounded-full px-3 text-sm text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring lg:flex"
-      >
+      <DropdownMenuTrigger className="group/cat hidden h-9 items-center gap-1.5 rounded-full px-3 text-sm text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring lg:flex">
         Categories
         <ChevronDown
           className="size-3.5 transition-transform duration-200 group-data-[state=open]/cat:rotate-180"

@@ -3,8 +3,6 @@
 import Link from "next/link";
 import { useRef } from "react";
 import { ArrowRight, CircleCheck } from "lucide-react";
-
-import { ParticleRing } from "@/components/home/particle-ring";
 import gsap from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
 import { useGSAP } from "@gsap/react";
@@ -261,32 +259,9 @@ export function Hero() {
           id="gsap-scanning-plane"
           ref={ringRef}
           aria-hidden="true"
-          className="pointer-events-none absolute left-1/2 top-[6vh] z-20 h-[26vh] w-[78vw] max-w-[900px] -translate-x-1/2 opacity-80 will-change-transform"
+          className="pointer-events-none absolute left-1/2 top-[6vh] z-20 h-[26vh] w-[78vw] max-w-[900px] -translate-x-1/2 rounded-[100%] border border-[#FACC15]/60 opacity-80 shadow-[0_0_60px_rgba(250,204,21,0.4),inset_0_0_60px_rgba(250,204,21,0.25)] will-change-transform"
           style={{ transformStyle: "preserve-3d" }}
-        >
-          {/*
-            THE ORIGINAL CSS HALO, now a child rather than this element itself.
-
-            The brief asked for two things that cannot both be true of one node:
-            mount the canvas INSIDE #gsap-scanning-plane, and set the old CSS
-            ring to opacity 0. They were the same element - opacity is inherited
-            by the whole subtree, so hiding the ring would have hidden the canvas
-            with it.
-
-            Splitting them satisfies both. The container keeps the id, the ref
-            and every GSAP tween (descent, tilt, scale, opacity); the halo below
-            is only the border and glow, and can be hidden on its own.
-
-            opacity-0 rather than deleted: toggling this one class is how the
-            experiment gets reverted visually without touching the timeline.
-          */}
-          <div className="absolute inset-0 rounded-[100%] border border-[#FACC15]/60 opacity-0 shadow-[0_0_60px_rgba(250,204,21,0.4),inset_0_0_60px_rgba(250,204,21,0.25)]" />
-
-          {/* The experiment. Inherits the container's GSAP transform, so the
-              particles descend and tilt with the scanner rather than floating
-              independently of it. */}
-          <ParticleRing />
-        </div>
+        />
 
         {/* ── CONTENT ───────────────────────────────────────────────────── */}
         <div
