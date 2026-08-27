@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, asc, desc, eq, gt, lte, ne } from "drizzle-orm";
+import { and, asc, desc, eq, gt, lte, ne, sql } from "drizzle-orm";
 
 import { db } from "@/db";
 import { events, venues } from "@/db/schema";
@@ -61,4 +61,113 @@ export async function getNextDrop(): Promise<NextDrop | null> {
     .limit(1);
 
   return live[0] ? { ...live[0], isLive: true } : null;
+}
+
+export type EventSection = {
+  id: string;
+  name: string;
+  priceCents: number;
+  seatsTotal: number;
+  seatsLeft: number;
+};
+
+export type EventDetail = {
+  id: string;
+  title: string;
+  subtitle: string | null;
+  description: string | null;
+  venue: string;
+  city: string;
+  startsAt: Date;
+  dropAt: Date;
+  status: "draft" | "scheduled" | "live" | "ended";
+  /** Two oklch hues in the gold band, for the generated poster. */
+  hues: [number, number];
+  sections: EventSection[];
+  /** Where this record came from, so the page can be honest about it. */
+  source: "database" | "mock";
+};
+
+/**
+ * Deterministic poster hues for a database event.
+ *
+ * The schema has no artwork column, so the two hues are derived from the id
+ * itself. Deterministic rather than random because the poster must not change
+ * between a server render and a client navigation - and the same event must look
+ * the same on the card and on its detail page.
+ *
+ * Both land inside the 45-95 gold band, so a generated poster can never leave
+ * the Obsidian/Champagne palette.
+ */
+function huesFromId(id: string): [number, number] {
+  let hash = 0;
+  for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) | 0;
+  const a = 45 + (Math.abs(hash) % 51);
+  const b = 45 + (Math.abs(hash >> 8) % 51);
+  return [a, b];
+}
+
+/**
+ * One event with its venue and priced sections, including live availability.
+ *
+ * Availability is computed from the SOURCE OF TRUTH, not from `seats.status`.
+ * A seat counts as available when no order item claims it and no unexpired,
+ * unreleased hold covers it. That is the same definition the hold API will use
+ * in T20, so the number on this page cannot disagree with the number the
+ * checkout enforces - and expired holds free their seats here with no cron job,
+ * which is the lazy expiry T22 is about.
+ *
+ * Returns null for an unknown id so the caller can call notFound().
+ */
+export async function getEventById(id: string): Promise<EventDetail | null> {
+  const rows = await db
+    .select({
+      id: events.id,
+      title: events.title,
+      description: events.description,
+      startsAt: events.startsAt,
+      dropAt: events.dropAt,
+      status: events.status,
+      venue: venues.name,
+      city: venues.city,
+    })
+    .from(events)
+    .innerJoin(venues, eq(venues.id, events.venueId))
+    .where(eq(events.id, id))
+    .limit(1);
+
+  const event = rows[0];
+  if (!event) return null;
+
+  const sectionRows = await db.execute(sql`
+    select
+      s.id,
+      s.name,
+      s.price_cents as "priceCents",
+      count(st.id)::int as "seatsTotal",
+      count(st.id) filter (
+        where not exists (
+          select 1 from order_items oi where oi.seat_id = st.id
+        )
+        and not exists (
+          select 1 from holds h
+          where h.seat_id = st.id
+            and h.released_at is null
+            and h.expires_at > now()
+        )
+      )::int as "seatsLeft"
+    from sections s
+    left join seats st on st.section_id = s.id
+    where s.event_id = ${id}
+    group by s.id, s.name, s.price_cents
+    order by s.price_cents desc
+  `);
+
+  return {
+    ...event,
+    subtitle: null,
+    hues: huesFromId(event.id),
+    sections: sectionRows as unknown as EventSection[],
+    source: "database",
+  };
 }

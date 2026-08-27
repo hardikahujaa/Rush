@@ -303,7 +303,7 @@ SUPABASE_SERVICE_ROLE_KEY="eyJ..."
 
 ---
 
-### ☐ T18 🟡 — Event detail page
+### ☑ T18 🟡 — Event detail page
 
 **Prompt:**
 
