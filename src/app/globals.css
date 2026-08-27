@@ -296,3 +296,80 @@
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
   }
 }
+
+/* ─── Live pulse border ────────────────────────────────────────────────────
+   A sliver of champagne gold travelling the edge of a card.
+
+   Deliberately declared at TOP LEVEL, not inside @layer components. Tailwind v4
+   composes its mask-* and backdrop-* utilities from its own custom properties
+   and drops bare declarations of those families that it finds inside its
+   layers - the same way it silently swallowed a raw backdrop-filter earlier in
+   this project. Outside the cascade layers it is left alone.
+
+   A conic-gradient cannot be transitioned: gradients are not interpolatable, so
+   animating one directly does nothing. Registering the angle as a typed custom
+   property with @property makes it animatable, and the gradient re-resolves each
+   frame from that single value. */
+
+@property --pulse-angle {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
+}
+
+@keyframes rush-pulse-rotate {
+  to {
+    --pulse-angle: 360deg;
+  }
+}
+
+.live-pulse::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border-radius: inherit;
+  /* The ring thickness. The mask below punches out everything inside this
+     padding, leaving exactly this much gradient visible as a border. */
+  padding: 1px;
+  background: conic-gradient(
+    from var(--pulse-angle),
+    transparent 0%,
+    transparent 7%,
+    #facc15 11%,
+    #fef3c7 12.5%,
+    #facc15 14%,
+    transparent 18%,
+    transparent 100%
+  );
+  /* Two identical masks: one clipped to the content box, one to the border box.
+     Excluding the first from the second leaves only the 1px padding ring.
+
+     The background-clip technique that is usually taught for gradient borders
+     needs an OPAQUE fill painted to padding-box to hide the gradient's middle -
+     which would sit on top of the card's frosted glass and flatten it. Masking
+     removes the middle instead of covering it, so the glass survives. */
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  opacity: 0.2;
+  pointer-events: none;
+  /* Slow on purpose. This is meant to be noticed peripherally, not watched -
+     and a slower revolution is also cheaper, since each frame re-resolves the
+     gradient. */
+  animation: rush-pulse-rotate 6s linear infinite;
+}
+
+/* Ambient, decorative, and running on every card at once - the first thing that
+   should stop when someone asks their OS for less motion. The sliver stays
+   parked where it is, so the card keeps its lit edge without the travel. */
+@media (prefers-reduced-motion: reduce) {
+  .live-pulse::before {
+    animation: none;
+  }
+}

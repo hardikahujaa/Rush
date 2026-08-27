@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { CalendarDays, MapPin } from "lucide-react";
 
+import { SeatCounter } from "@/components/home/seat-counter";
 import { formatPaise, type MockEvent } from "@/lib/mock-events";
 import { cn } from "@/lib/utils";
 
@@ -55,7 +56,10 @@ export function EventCard({
       href={`/events/${event.id}`}
       className={cn(
         "group/card relative flex flex-col overflow-hidden rounded-2xl outline-none transition-all duration-300",
-        "glass hover:-translate-y-1 hover:border-gold/25",
+        // live-pulse paints the travelling gold sliver on ::before. The card is
+        // already relative and overflow-hidden, which the ring needs in order to
+        // clip to the rounded corners.
+        "glass live-pulse hover:-translate-y-1 hover:border-gold/25",
         "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
         className,
       )}
@@ -124,23 +128,19 @@ export function EventCard({
             </span>
           </span>
 
-          {scarcity && (
-            <span
-              className={cn(
-                "flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium",
-                scarcity.level === "critical"
-                  ? "border-gold/35 bg-gold/12 text-gold-champagne"
-                  : "border-white/10 bg-white/5 text-muted-foreground",
-              )}
-            >
+          {/* Critical scarcity gets the live counter. "Selling fast" stays
+              static because there is no number in it to tick. */}
+          {scarcity?.level === "critical" && (
+            <SeatCounter initial={event.seatsLeft} />
+          )}
+
+          {scarcity?.level === "warn" && (
+            <span className="flex items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] font-medium text-muted-foreground">
               {/* A dot as well as colour, so urgency is not carried by hue alone
                   for anyone who cannot separate these two. */}
               <span
                 aria-hidden="true"
-                className={cn(
-                  "size-1.5 rounded-full",
-                  scarcity.level === "critical" ? "bg-gold" : "bg-muted-foreground",
-                )}
+                className="size-1.5 shrink-0 rounded-full bg-muted-foreground"
               />
               {scarcity.text}
             </span>
