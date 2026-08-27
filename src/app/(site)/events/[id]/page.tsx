@@ -54,7 +54,11 @@ export default async function EventDetailPage({ params }: Props) {
   const seatsLeft = event.sections.reduce((sum, s) => sum + s.seatsLeft, 0);
   const seatsTotal = event.sections.reduce((sum, s) => sum + s.seatsTotal, 0);
   const soldOut = seatsTotal > 0 && seatsLeft === 0;
-  const cheapest = Math.min(...event.sections.map((s) => s.priceCents));
+  /* Math.min of an empty array is Infinity, which would render as a nonsense
+     price on a just-announced event. Null means "not announced yet". */
+  const cheapest = event.sections.length
+    ? Math.min(...event.sections.map((s) => s.priceCents))
+    : null;
 
   return (
     <main className="relative">
@@ -97,7 +101,7 @@ export default async function EventDetailPage({ params }: Props) {
               upper band only dims enough to keep the back link legible. */}
           <div
             aria-hidden="true"
-            className="absolute inset-0 bg-gradient-to-t from-black via-black/80 to-transparent"
+            className="absolute inset-0 bg-gradient-to-t from-black via-black/90 to-transparent"
           />
           <div
             aria-hidden="true"
@@ -156,6 +160,7 @@ export default async function EventDetailPage({ params }: Props) {
         <div className="glass rounded-3xl border-gold/15 px-6 py-10 sm:px-10 sm:py-12">
           <EventCTA
             dropAtIso={event.dropAt.toISOString()}
+            dropLabel={formatWhen(event.dropAt)}
             eventId={event.id}
             soldOut={soldOut}
           />
@@ -173,13 +178,33 @@ export default async function EventDetailPage({ params }: Props) {
               Choose your tier
             </h2>
           </div>
-          <p className="hidden shrink-0 text-sm text-muted-foreground sm:block">
-            from{" "}
-            <span className="font-semibold tabular-nums text-foreground">
-              {formatPaise(cheapest)}
-            </span>
-          </p>
+          {cheapest !== null && (
+            <p className="hidden shrink-0 text-sm text-muted-foreground sm:block">
+              from{" "}
+              <span className="font-semibold tabular-nums text-foreground">
+                {formatPaise(cheapest)}
+              </span>
+            </p>
+          )}
         </div>
+
+        {/*
+          Just-announced events genuinely have no pricing yet, so this says so
+          rather than inventing three plausible tiers. A ticketing product that
+          shows a price nobody has committed to has already spent the trust it
+          needs at checkout.
+        */}
+        {event.sections.length === 0 && (
+          <div className="glass mt-7 rounded-2xl border-gold/20 px-6 py-10 text-center">
+            <p className="text-sm text-foreground">
+              Pricing is announced when tickets drop
+            </p>
+            <p className="mx-auto mt-2 max-w-sm text-pretty text-xs leading-relaxed text-muted-foreground">
+              The organizer has not published tiers for this show yet. Set a
+              reminder above and the prices land with the release.
+            </p>
+          </div>
+        )}
 
         <ul className="mt-7 overflow-hidden rounded-2xl">
           {event.sections.map((section, index) => {
@@ -231,11 +256,13 @@ export default async function EventDetailPage({ params }: Props) {
           })}
         </ul>
 
+        {event.sections.length > 0 && (
         <p className="mt-5 text-xs text-muted-foreground">
           {event.source === "database"
             ? "Seat counts are live: sold seats and unexpired holds are already excluded."
             : "This listing renders placeholder data while the events table is wired up."}
         </p>
+        )}
       </section>
     </main>
   );

@@ -6,7 +6,9 @@ import {
   SELLING_FAST,
   SPOTLIGHT_COMEDY,
   SPOTLIGHT_MOVIES,
+  UPCOMING,
   type MockEvent,
+  type UpcomingEvent,
 } from "@/lib/mock-events";
 
 const UUID =
@@ -81,6 +83,39 @@ function fromMock(event: MockEvent): EventDetail {
 }
 
 /**
+ * Adapt a "Just announced" row.
+ *
+ * These carry far less than a card does: no venue, no start time, no pricing.
+ * That is the point of the section - the show has been announced, the details
+ * have not.
+ *
+ * Nothing is invented to fill the gaps. `sections` comes back empty and the
+ * detail page renders an explicit "pricing announced when tickets drop" state
+ * rather than three plausible-looking numbers nobody has committed to. Inventing
+ * a price on a ticketing product is the kind of small lie that costs the trust
+ * the whole thing runs on.
+ */
+function fromUpcoming(event: UpcomingEvent): EventDetail {
+  const dropAt = new Date(event.dropAt);
+  return {
+    id: event.id,
+    title: event.title,
+    subtitle: event.subtitle,
+    description: null,
+    venue: "Venue to be announced",
+    city: event.city,
+    /* The show itself is not scheduled yet either. Six weeks past the drop is a
+       placeholder, and the page never presents it as confirmed. */
+    startsAt: new Date(dropAt.getTime() + 42 * DAY_MS),
+    dropAt,
+    status: "scheduled",
+    hues: event.hues,
+    sections: [],
+    source: "mock",
+  };
+}
+
+/**
  * Resolve an event id from either source.
  *
  * The homepage rails still render mock records with ids like `sf-1`, while the
@@ -94,5 +129,9 @@ export async function findEvent(id: string): Promise<EventDetail | null> {
   if (UUID.test(id)) return getEventById(id);
 
   const mock = ALL_MOCK.find((event) => event.id === id);
-  return mock ? fromMock(mock) : null;
+  if (mock) return fromMock(mock);
+
+  // The "Just announced" rows live in their own list with a different shape.
+  const upcoming = UPCOMING.find((event) => event.id === id);
+  return upcoming ? fromUpcoming(upcoming) : null;
 }

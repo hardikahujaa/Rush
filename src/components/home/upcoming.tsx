@@ -1,4 +1,5 @@
-import { BellPlus } from "lucide-react";
+import Link from "next/link";
+import { Bell } from "lucide-react";
 
 import { UPCOMING } from "@/lib/mock-events";
 
@@ -44,7 +45,7 @@ export function Upcoming() {
           {UPCOMING.map((e, i) => (
             <li
               key={e.id}
-              className="glass flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:gap-5 sm:p-5"
+              className="glass group/row relative flex flex-col gap-3 p-4 transition-colors hover:border-gold/25 sm:flex-row sm:items-center sm:gap-5 sm:p-5"
               /* A single seam between rows rather than a border on each, which
                  would double up and read as a heavier line. */
               style={{ marginTop: i === 0 ? 0 : -1 }}
@@ -58,9 +59,29 @@ export function Upcoming() {
               />
 
               <div className="min-w-0 flex-1">
-                <p className="truncate text-base font-medium tracking-[-0.01em]">
-                  {e.title}
-                </p>
+                {/*
+                  STRETCHED LINK, not a wrapper.
+
+                  The obvious way to make the whole row clickable is to wrap it
+                  in <Link>. That is invalid here: this row also contains a
+                  <button>, and HTML forbids interactive content inside an <a>.
+                  Browsers recover from it unpredictably and keyboard users get a
+                  control they cannot reach.
+
+                  Instead the link stays a normal anchor around the title - so
+                  its accessible name is the event name, and the tab stop is
+                  where a reader expects - and its ::after is stretched over the
+                  whole row to catch pointer clicks. The reminder button sits on
+                  a higher layer, so it still receives its own clicks.
+                */}
+                <Link
+                  href={`/events/${e.id}`}
+                  className="after:absolute after:inset-0 after:content-[''] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <span className="block truncate text-base font-medium tracking-[-0.01em] transition-colors group-hover/row:text-gold-champagne">
+                    {e.title}
+                  </span>
+                </Link>
                 <p className="truncate text-xs text-muted-foreground">
                   {e.subtitle} · {e.category} · {e.city}
                 </p>
@@ -76,11 +97,13 @@ export function Upcoming() {
                   </p>
                 </div>
 
+                {/* z-10 lifts the button above the stretched link's ::after,
+                    which would otherwise swallow every click on it. */}
                 <button
                   type="button"
-                  className="btn-gold-outline inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full px-3.5 text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring"
+                  className="btn-gold-outline relative z-10 inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full px-3.5 text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring"
                 >
-                  <BellPlus className="size-3.5" aria-hidden="true" />
+                  <Bell className="size-3.5" aria-hidden="true" />
                   <span className="hidden sm:inline">Set reminder</span>
                   <span className="sr-only sm:hidden">Set reminder for {e.title}</span>
                 </button>

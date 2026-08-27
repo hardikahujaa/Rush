@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useSyncExternalStore } from "react";
-import { ArrowRight, BellPlus } from "lucide-react";
+import { ArrowRight, Bell } from "lucide-react";
 
 /**
  * The wall clock, exposed as an external store.
@@ -77,10 +77,15 @@ function Separator() {
  */
 export function EventCTA({
   dropAtIso,
+  dropLabel,
   eventId,
   soldOut,
 }: {
   dropAtIso: string;
+  /** Release moment, pre-formatted on the SERVER. Formatting a date in the
+   *  browser risks a different locale or timezone than the server used, which
+   *  is a hydration mismatch on a string the user is meant to trust. */
+  dropLabel: string;
   eventId: string;
   soldOut: boolean;
 }) {
@@ -104,7 +109,7 @@ export function EventCTA({
           type="button"
           className="btn-gold-outline inline-flex h-12 items-center gap-2 rounded-xl px-6 text-[15px] font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring"
         >
-          <BellPlus className="size-4" aria-hidden="true" />
+          <Bell className="size-4" aria-hidden="true" />
           Notify me if seats are released
         </button>
       </div>
@@ -151,6 +156,19 @@ export function EventCTA({
 
   return (
     <div className="flex flex-col items-center gap-5">
+      {/* UPCOMING badge carrying the exact release moment. The countdown below
+          answers "how long", this answers "when" - and unlike the countdown it
+          is a fixed string, so it can be read, screenshotted and diarised. */}
+      <span className="glass inline-flex flex-wrap items-center justify-center gap-x-2.5 gap-y-1 rounded-full px-4 py-2 text-center">
+        <span className="text-[11px] font-semibold uppercase tracking-[0.2em] text-gold-champagne">
+          Upcoming
+        </span>
+        <span aria-hidden="true" className="text-muted-foreground/50">
+          ·
+        </span>
+        <span className="text-xs text-muted-foreground">{dropLabel}</span>
+      </span>
+
       <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
         Tickets release in
       </p>
@@ -174,10 +192,10 @@ export function EventCTA({
 
       <button
         type="button"
-        className="btn-gold-outline inline-flex h-11 items-center gap-2 rounded-xl px-5 text-sm font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring"
+        className="btn-gold-outline inline-flex h-12 items-center gap-2 rounded-xl px-7 text-sm font-semibold uppercase tracking-wide outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring"
       >
-        <BellPlus className="size-4" aria-hidden="true" />
-        Remind me before the drop
+        <Bell className="size-4" aria-hidden="true" />
+        Set reminder
       </button>
     </div>
   );
