@@ -1,6 +1,7 @@
 import "server-only";
 
 import { getEventById, type EventDetail } from "@/db/queries/events";
+import { tierBreakdown } from "@/lib/mock-data";
 import {
   RECOMMENDED,
   SELLING_FAST,
@@ -24,30 +25,20 @@ const ALL_MOCK: MockEvent[] = [
 const DAY_MS = 86_400_000;
 
 /**
- * Price ladder for a mock event.
- *
- * `fromPriceCents` is the cheapest tier, so the other two are multiples of it.
- * The ratios are taken from the real seeded data (Rs 4,999 / 2,499 / 999 is
- * roughly 5x / 2.5x / 1x) so a mock detail page and a database one show the same
- * shape of pricing rather than obviously different economics.
- */
-const TIERS: { name: string; multiplier: number }[] = [
-  { name: "Front", multiplier: 5 },
-  { name: "Middle", multiplier: 2.5 },
-  { name: "Rear", multiplier: 1 },
-];
-
-/**
  * Adapt a homepage mock card into the same shape the database returns.
  *
  * The detail page then has exactly one type to render and never branches on
  * where the record came from - which is what makes replacing the mock rails with
  * real queries a change of source rather than a rewrite.
+ *
+ * The pricing rows are NOT invented here. They come from `tierBreakdown`, the
+ * same function the seat map legend calls, so "38 of 226 seats available" on
+ * this page and the count in the legend are one computation rendered twice. The
+ * previous version derived tiers from a multiplier ladder and split the card's
+ * remaining count across them by ratio, which was three independent estimates
+ * of a number the grid already knew exactly.
  */
 function fromMock(event: MockEvent): EventDetail {
-  const perTier = Math.floor(event.seatsTotal / TIERS.length);
-  const availableRatio = event.seatsLeft / event.seatsTotal;
-
   return {
     id: event.id,
     title: event.title,
@@ -66,17 +57,12 @@ function fromMock(event: MockEvent): EventDetail {
     dropAt: new Date(new Date(event.startsAt).getTime() - 21 * DAY_MS),
     status: "live",
     hues: event.hues,
-    sections: TIERS.map((tier, index) => ({
-      id: `${event.id}-${tier.name.toLowerCase()}`,
+    sections: tierBreakdown(event.id).map((tier) => ({
+      id: `${event.id}-${tier.id}`,
       name: tier.name,
-      priceCents: Math.round(event.fromPriceCents * tier.multiplier),
-      seatsTotal: perTier,
-      // Spread the card's real remaining count across the tiers rather than
-      // inventing a number, so the detail page agrees with the card.
-      seatsLeft: Math.max(
-        0,
-        Math.min(perTier, Math.round(perTier * availableRatio) - index),
-      ),
+      priceCents: tier.priceCents,
+      seatsTotal: tier.stats.total,
+      seatsLeft: tier.stats.available,
     })),
     source: "mock",
   };

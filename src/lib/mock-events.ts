@@ -5,13 +5,26 @@
  * the layout can be built and reviewed at realistic density before T17 wires the
  * rails to `src/db/queries/events.ts`.
  *
+ * ── PRESENTATION LIVES HERE. NUMBERS DO NOT. ───────────────────────────────
+ * These records carry a title, a venue name, two hues - the things a card shows
+ * that no seat can tell you. Every *quantity* (seats left, seats total, from
+ * price) is computed from `mock-data.ts`, which owns the physical grid.
+ *
+ * Storing those numbers here as literals is what allowed a card to advertise
+ * twelve seats while the seat map held nine. Deriving them makes that class of
+ * bug unrepresentable rather than merely fixed: there is no second copy left to
+ * fall out of date.
+ *
  * Two rules kept deliberately, so swapping in real data changes nothing visually:
  *   - prices are integer paise, exactly as `sections.price_cents` stores them
- *   - `seatsLeft` / `seatsTotal` are the numbers the real availability query
- *     already returns, so the urgency badge needs no new field
+ *   - the derived fields have the same names and shapes the real availability
+ *     query returns, so the urgency badge needs no new field
  */
 
-export type MockEvent = {
+import { fromPrice, seatStats } from "@/lib/mock-data";
+
+/** What is authored by hand: everything a seat cannot tell you. */
+type RawMockEvent = {
   id: string;
   title: string;
   subtitle: string;
@@ -20,13 +33,17 @@ export type MockEvent = {
   city: string;
   /** ISO date string. */
   startsAt: string;
-  /** Paise. 499900 = Rs 4,999. */
-  fromPriceCents: number;
-  seatsLeft: number;
-  seatsTotal: number;
   /** Two oklch hues used for the card's generated artwork. */
   hues: [number, number];
   tag?: "trending" | "just-announced" | "final-release";
+};
+
+/** What the UI consumes: the authored fields plus the computed ones. */
+export type MockEvent = RawMockEvent & {
+  /** Paise. 499900 = Rs 4,999. Cheapest tier in the venue. */
+  fromPriceCents: number;
+  seatsLeft: number;
+  seatsTotal: number;
 };
 
 /** Rs 4,999 from 499900. Grouped in the Indian system. */
@@ -34,7 +51,7 @@ export function formatPaise(paise: number): string {
   return `₹${Math.round(paise / 100).toLocaleString("en-IN")}`;
 }
 
-export const SELLING_FAST: MockEvent[] = [
+const RAW_SELLING_FAST: RawMockEvent[] = [
   {
     id: "sf-1",
     title: "Midnight Circuit",
@@ -43,9 +60,6 @@ export const SELLING_FAST: MockEvent[] = [
     venue: "Nehru Indoor Stadium",
     city: "Chennai",
     startsAt: "2026-09-04T19:30:00+05:30",
-    fromPriceCents: 249900,
-    seatsLeft: 12,
-    seatsTotal: 288,
     hues: [95, 88],
     tag: "final-release",
   },
@@ -57,9 +71,6 @@ export const SELLING_FAST: MockEvent[] = [
     venue: "Jio World Garden",
     city: "Mumbai",
     startsAt: "2026-09-11T20:00:00+05:30",
-    fromPriceCents: 349900,
-    seatsLeft: 38,
-    seatsTotal: 1200,
     hues: [88, 62],
     tag: "trending",
   },
@@ -71,9 +82,6 @@ export const SELLING_FAST: MockEvent[] = [
     venue: "Ranga Shankara",
     city: "Bengaluru",
     startsAt: "2026-09-06T19:00:00+05:30",
-    fromPriceCents: 99900,
-    seatsLeft: 7,
-    seatsTotal: 320,
     hues: [75, 45],
     tag: "final-release",
   },
@@ -85,15 +93,12 @@ export const SELLING_FAST: MockEvent[] = [
     venue: "Salt Lake Stadium",
     city: "Kolkata",
     startsAt: "2026-09-19T19:45:00+05:30",
-    fromPriceCents: 79900,
-    seatsLeft: 143,
-    seatsTotal: 62000,
     hues: [62, 88],
     tag: "trending",
   },
 ];
 
-export const RECOMMENDED: MockEvent[] = [
+const RAW_RECOMMENDED: RawMockEvent[] = [
   {
     id: "rc-1",
     title: "NEON/NOISE",
@@ -102,9 +107,6 @@ export const RECOMMENDED: MockEvent[] = [
     venue: "Island Grounds",
     city: "Chennai",
     startsAt: "2026-09-27T16:00:00+05:30",
-    fromPriceCents: 299900,
-    seatsLeft: 640,
-    seatsTotal: 5000,
     hues: [95, 45],
     tag: "trending",
   },
@@ -116,9 +118,6 @@ export const RECOMMENDED: MockEvent[] = [
     venue: "Sathyam Cinemas",
     city: "Chennai",
     startsAt: "2026-09-02T21:15:00+05:30",
-    fromPriceCents: 45000,
-    seatsLeft: 22,
-    seatsTotal: 402,
     hues: [55, 95],
   },
   {
@@ -129,9 +128,6 @@ export const RECOMMENDED: MockEvent[] = [
     venue: "Music Academy",
     city: "Chennai",
     startsAt: "2026-09-14T21:00:00+05:30",
-    fromPriceCents: 149900,
-    seatsLeft: 88,
-    seatsTotal: 600,
     hues: [88, 55],
   },
   {
@@ -142,15 +138,12 @@ export const RECOMMENDED: MockEvent[] = [
     venue: "Studio 41",
     city: "Chennai",
     startsAt: "2026-09-21T10:00:00+05:30",
-    fromPriceCents: 599900,
-    seatsLeft: 4,
-    seatsTotal: 16,
     hues: [55, 75],
     tag: "final-release",
   },
 ];
 
-export const SPOTLIGHT_COMEDY: MockEvent[] = [
+const RAW_SPOTLIGHT_COMEDY: RawMockEvent[] = [
   {
     id: "cm-1",
     title: "Room Temperature",
@@ -159,9 +152,6 @@ export const SPOTLIGHT_COMEDY: MockEvent[] = [
     venue: "Prithvi Theatre",
     city: "Mumbai",
     startsAt: "2026-09-08T20:30:00+05:30",
-    fromPriceCents: 89900,
-    seatsLeft: 31,
-    seatsTotal: 200,
     hues: [75, 95],
   },
   {
@@ -172,9 +162,6 @@ export const SPOTLIGHT_COMEDY: MockEvent[] = [
     venue: "The Cuckoo Club",
     city: "Mumbai",
     startsAt: "2026-09-13T21:00:00+05:30",
-    fromPriceCents: 49900,
-    seatsLeft: 16,
-    seatsTotal: 90,
     hues: [45, 75],
   },
   {
@@ -185,14 +172,11 @@ export const SPOTLIGHT_COMEDY: MockEvent[] = [
     venue: "Courtyard",
     city: "Bengaluru",
     startsAt: "2026-09-17T20:00:00+05:30",
-    fromPriceCents: 29900,
-    seatsLeft: 54,
-    seatsTotal: 120,
     hues: [62, 75],
   },
 ];
 
-export const SPOTLIGHT_MOVIES: MockEvent[] = [
+const RAW_SPOTLIGHT_MOVIES: RawMockEvent[] = [
   {
     id: "mv-1",
     title: "The Silent Coast",
@@ -201,9 +185,6 @@ export const SPOTLIGHT_MOVIES: MockEvent[] = [
     venue: "PVR Icon",
     city: "Bengaluru",
     startsAt: "2026-09-05T18:45:00+05:30",
-    fromPriceCents: 38000,
-    seatsLeft: 61,
-    seatsTotal: 240,
     hues: [95, 55],
   },
   {
@@ -214,9 +195,6 @@ export const SPOTLIGHT_MOVIES: MockEvent[] = [
     venue: "AMB Cinemas",
     city: "Hyderabad",
     startsAt: "2026-09-09T22:00:00+05:30",
-    fromPriceCents: 42000,
-    seatsLeft: 9,
-    seatsTotal: 380,
     hues: [45, 95],
     tag: "final-release",
   },
@@ -228,12 +206,35 @@ export const SPOTLIGHT_MOVIES: MockEvent[] = [
     venue: "Regal Cinema",
     city: "Mumbai",
     startsAt: "2026-09-15T19:00:00+05:30",
-    fromPriceCents: 35000,
-    seatsLeft: 74,
-    seatsTotal: 300,
     hues: [88, 55],
   },
 ];
+
+/**
+ * Join an authored record to the live numbers from its physical grid.
+ *
+ * This is the ONLY place a mock event acquires a quantity. Every rail, card and
+ * badge downstream reads the result, so the landing page and the seat map are
+ * reading the same `seats` array through two different shapes of the same
+ * question - not two numbers that happen to have been typed to match.
+ *
+ * An event with no venue defined falls back to zeroes rather than throwing: a
+ * card that renders "sold out" is recoverable, a homepage that 500s is not.
+ */
+function withLiveCounts(event: RawMockEvent): MockEvent {
+  const stats = seatStats(event.id);
+  return {
+    ...event,
+    fromPriceCents: fromPrice(event.id) ?? 0,
+    seatsLeft: stats.available,
+    seatsTotal: stats.total,
+  };
+}
+
+export const SELLING_FAST: MockEvent[] = RAW_SELLING_FAST.map(withLiveCounts);
+export const RECOMMENDED: MockEvent[] = RAW_RECOMMENDED.map(withLiveCounts);
+export const SPOTLIGHT_COMEDY: MockEvent[] = RAW_SPOTLIGHT_COMEDY.map(withLiveCounts);
+export const SPOTLIGHT_MOVIES: MockEvent[] = RAW_SPOTLIGHT_MOVIES.map(withLiveCounts);
 
 export type UpcomingEvent = {
   id: string;

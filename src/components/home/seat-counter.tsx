@@ -1,63 +1,40 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 
-/** Sales arrive irregularly, so the interval is re-rolled after every tick. */
-const MIN_DELAY_MS = 5_000;
-const MAX_DELAY_MS = 15_000;
-
-/** Never reach zero: a card claiming "0 seats left" is a card nobody can buy. */
-const FLOOR = 1;
-
-const randomDelay = () =>
-  MIN_DELAY_MS + Math.random() * (MAX_DELAY_MS - MIN_DELAY_MS);
-
 /**
- * Live seat counter.
+ * The scarcity badge.
  *
- * ⚠ SIMULATED. The decrements here are invented on a timer - no seat is
- * actually being sold. That is acceptable only because every card on this page
- * renders mock data. Before this reaches real events it must be driven by the
- * real availability figure, or the badge becomes fabricated sales pressure
- * against real buyers, which is exactly the dark pattern the honest seat count
- * was there to avoid.
+ * ── WHY THE SIMULATED SALES ARE GONE ───────────────────────────────────────
+ * This component used to invent its own decrements on a random timer: it took a
+ * starting number and ticked it down every 5-15 seconds, so a card that opened
+ * showing "Only 12 seats left" read "Only 9 seats left" within half a minute.
  *
- * The swap is deliberately a one-prop change: replace `initial` with a value
- * pushed from Supabase Realtime on the `seats` table and delete the effect. The
- * rendering below does not care where the number came from.
+ * Two things were wrong with that, and they are the same thing seen from
+ * different angles.
+ *
+ * It broke the arithmetic. The seat map for that event still contains exactly
+ * twelve available seats, because `mock-data.ts` says so. A user who read the
+ * badge, clicked through, and counted would find the product contradicting
+ * itself - and on a ticketing site, the seat count IS the product.
+ *
+ * And it was fabricated urgency. A number that falls on a timer regardless of
+ * whether anyone is buying is manufactured pressure, which is precisely the dark
+ * pattern the honest no-oversell backend exists to avoid.
+ *
+ * So the number is now a prop, full stop. The flip animation stays, because the
+ * value WILL move once Supabase Realtime pushes updates from the `seats` table -
+ * at which point every change it renders will correspond to a real sale.
  */
 export function SeatCounter({
-  initial,
+  seats,
   className,
 }: {
-  initial: number;
+  /** The live available count. Computed upstream; never adjusted here. */
+  seats: number;
   className?: string;
 }) {
-  const [seats, setSeats] = useState(initial);
   const reduceMotion = useReducedMotion();
-
-  useEffect(() => {
-    if (seats <= FLOOR) return;
-
-    /**
-     * A self-rescheduling timeout, not setInterval.
-     *
-     * setInterval would lock every card to one fixed cadence, so all fourteen
-     * would tick in lockstep and read as a global animation rather than
-     * independent sales. Re-rolling the delay after each tick keeps them
-     * uncorrelated.
-     */
-    const id = setTimeout(() => {
-      setSeats((current) => {
-        if (current <= FLOOR) return current;
-        const sold = Math.random() < 0.75 ? 1 : 2;
-        return Math.max(FLOOR, current - sold);
-      });
-    }, randomDelay());
-
-    return () => clearTimeout(id);
-  }, [seats]);
 
   return (
     <span
@@ -70,14 +47,13 @@ export function SeatCounter({
       /**
        * Deliberately NOT a live region.
        *
-       * Fourteen of these tick independently. Announcing each change would turn
-       * a screen reader into a stream of interruptions for a number that is
-       * decorative urgency, not a task the user is performing. The current value
-       * is in the accessible name, so it reads correctly whenever someone
-       * actually navigates here.
+       * Fourteen of these sit on the homepage. Announcing every change would
+       * turn a screen reader into a stream of interruptions for a number that is
+       * context, not a task the user is performing. The current value is in the
+       * accessible name, so it reads correctly whenever someone navigates here.
        */
-      /* Pluralised, because the floor is 1 and "Only 1 seats left" is therefore
-         guaranteed to appear on every card that bottoms out. */
+      /* Pluralised: "Only 1 seats left" is otherwise guaranteed to appear on any
+         event down to its last ticket. */
       aria-label={`Only ${seats} ${seats === 1 ? "seat" : "seats"} left`}
     >
       {/* A dot as well as colour, so urgency is not carried by hue alone. */}

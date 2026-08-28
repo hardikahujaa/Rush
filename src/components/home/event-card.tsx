@@ -131,7 +131,7 @@ export function EventCard({
           {/* Critical scarcity gets the live counter. "Selling fast" stays
               static because there is no number in it to tick. */}
           {scarcity?.level === "critical" && (
-            <SeatCounter initial={event.seatsLeft} />
+            <SeatCounter seats={event.seatsLeft} />
           )}
 
           {scarcity?.level === "warn" && (

@@ -318,7 +318,7 @@ SUPABASE_SERVICE_ROLE_KEY="eyJ..."
 
 > This is the part that makes the project worth putting on a CV. Slow down here. Read every explanation.
 
-### ☐ T19 🔴 — Seat map UI
+### ☑ T19 🔴 — Seat map UI
 
 **Prompt (Plan Mode):**
 
@@ -326,6 +326,30 @@ SUPABASE_SERVICE_ROLE_KEY="eyJ..."
 
 **Verify:** you can select and deselect seats and see the total update.
 **Commit:** `feat: seat map UI`
+
+**Done.** Two deviations from the prompt above, both deliberate:
+
+1. **Sold seats are pure black, not dark red.** Red on this palette collides with
+   nothing else on the page but does collide with the *meaning* users bring: red
+   reads as "error" or "warning", not "already bought". Sold seats are the
+   quietest thing in the room (`#000000`, 5% border) so attention lands on what
+   is buyable. Availability is never carried by colour alone - sold and held
+   seats also carry `disabled` and say their state in the accessible name.
+
+2. **The seat data was centralised first.** The prompt says "receives seats
+   grouped by section and row", which assumes a source. Building one exposed
+   that the landing badge, the T18 pricing table and this map each computed
+   availability independently - three numbers that could disagree, and did.
+   `src/lib/mock-data.ts` is now the only place a seat count exists;
+   `scripts/verify-seat-math.ts` asserts the invariants and
+   `scripts/verify-seat-sync.mjs` asserts the three rendered pages agree.
+
+**Also fixed while here:** `SeatCounter` used to invent sales on a random timer,
+so a card advertising 12 seats read 9 within half a minute while the map still
+held 12. It now renders the count it is given.
+
+**Known gap for T20:** selection is local state only, as specified. Nothing is
+reserved, so two people can select the same seat until the hold API exists.
 
 ---
 
