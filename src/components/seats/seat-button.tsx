@@ -56,11 +56,14 @@ export function SeatButton({
   seat,
   tier,
   selected,
+  mine,
   onToggle,
 }: {
   seat: Seat;
   tier: Tier;
   selected: boolean;
+  /** This browser holds this seat. Rendered apart from a stranger's hold. */
+  mine?: boolean;
   onToggle: (seat: Seat) => void;
 }) {
   const reduceMotion = useReducedMotion();
@@ -69,20 +72,27 @@ export function SeatButton({
   const label = `${tier.name}, row ${seat.row}, seat ${seat.number}, ${formatPaise(
     tier.priceCents,
   )}, ${
-    seat.status === "sold"
-      ? "sold"
-      : seat.status === "held"
-        ? "on hold, unavailable"
-        : selected
-          ? "selected"
-          : "available"
+    mine
+      ? "held by you"
+      : seat.status === "sold"
+        ? "sold"
+        : seat.status === "held"
+          ? "on hold, unavailable"
+          : selected
+            ? "selected"
+            : "available"
   }`;
 
   /* Fill and border per state. Kept as one lookup rather than a chain of
      conditional classes so every state is legible side by side. */
   const skin = selected
     ? { backgroundColor: "#FACC15", borderColor: "#FACC15", color: "#0A0A0A" }
-    : seat.status === "sold"
+    : /* Yours: unmistakably gold, but dimmer than a live selection, so the map
+         reads as "these are settled" rather than "these are still being
+         chosen". Crucially NOT the amber held fill, which means someone else. */
+      mine
+      ? { backgroundColor: "rgba(250,204,21,0.28)", borderColor: "#FACC15", color: "#FACC15" }
+      : seat.status === "sold"
       ? { backgroundColor: "#000000", borderColor: "rgba(255,255,255,0.05)", color: "transparent" }
       : seat.status === "held"
         ? { backgroundColor: "rgba(245,158,11,0.20)", borderColor: "rgba(245,158,11,0.45)", color: "transparent" }
@@ -103,7 +113,7 @@ export function SeatButton({
         "relative flex size-7 shrink-0 items-center justify-center rounded-[5px] border text-[9px] font-semibold outline-none",
         "focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-black",
         unavailable ? "cursor-not-allowed" : "cursor-pointer",
-        seat.status === "held" && !reduceMotion ? "animate-pulse" : "",
+        seat.status === "held" && !mine && !reduceMotion ? "animate-pulse" : "",
       ]
         .filter(Boolean)
         .join(" ")}
@@ -113,10 +123,10 @@ export function SeatButton({
       whileHover={unavailable || reduceMotion ? undefined : { scale: selected ? 1.1 : 1.06 }}
       whileTap={unavailable || reduceMotion ? undefined : { scale: 0.94 }}
     >
-      {/* The number is only painted when selected. Rendering it always would put
+      {/* The number is painted when the seat is yours or selected. Rendering it always would put
           286 pieces of 9px text on screen competing with the shape language;
           on the chosen seat it confirms exactly what is in the cart. */}
-      <span aria-hidden="true">{selected ? seat.number : ""}</span>
+      <span aria-hidden="true">{selected || mine ? seat.number : ""}</span>
     </motion.button>
   );
 }

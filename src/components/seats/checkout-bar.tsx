@@ -1,7 +1,7 @@
 "use client";
 
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { ShoppingCart, X } from "lucide-react";
+import { Loader2, ShoppingCart, X } from "lucide-react";
 
 import type { Seat, Tier } from "@/lib/mock-data";
 import { formatPaise } from "@/lib/mock-events";
@@ -29,12 +29,23 @@ export function CheckoutBar({
   tiersById,
   onRemove,
   limitHit,
+  onCheckout,
+  pending,
+  error,
+  canHold,
 }: {
   selected: Seat[];
   tiersById: Map<string, Tier>;
   onRemove: (seat: Seat) => void;
   /** Increments each time a click was refused. Drives the shake. */
   limitHit: number;
+  onCheckout: () => void;
+  /** A request is in flight. The button must not fire twice. */
+  pending: boolean;
+  /** Server-supplied failure text, already human-readable. */
+  error: string | null;
+  /** False for mock events, which have no database seats to hold. */
+  canHold: boolean;
 }) {
   const reduceMotion = useReducedMotion();
 
@@ -67,7 +78,9 @@ export function CheckoutBar({
         <div className="min-w-0 flex-1">
           {selected.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              Choose up to {MAX_SEATS} seats to continue
+              {canHold
+                ? `Choose up to ${MAX_SEATS} seats to continue`
+                : "Demo listing — seats here cannot be reserved"}
             </p>
           ) : (
             <>
@@ -114,15 +127,24 @@ export function CheckoutBar({
               a live region injected at the same moment as its text is often
               missed entirely by screen readers. */}
           <p role="status" aria-live="polite" className="sr-only">
-            {limitHit > 0
-              ? `Limit reached. You can select at most ${MAX_SEATS} seats. Remove one to choose another.`
-              : ""}
+            {error
+              ? error
+              : limitHit > 0
+                ? `Limit reached. You can select at most ${MAX_SEATS} seats. Remove one to choose another.`
+                : ""}
           </p>
-          {limitHit > 0 && (
+
+          {/* The server's answer wins the slot: "someone took that seat" is
+              more urgent than "you picked four". */}
+          {error ? (
+            <p aria-hidden="true" className="mt-1.5 text-[11px] font-medium text-gold-champagne">
+              {error}
+            </p>
+          ) : limitHit > 0 ? (
             <p aria-hidden="true" className="mt-1.5 text-[11px] text-gold-champagne/90">
               Maximum {MAX_SEATS} seats per order — remove one to pick another.
             </p>
-          )}
+          ) : null}
         </div>
 
         {/* ── right: total and the action ───────────────────────────────── */}
@@ -138,16 +160,35 @@ export function CheckoutBar({
 
           <button
             type="button"
-            disabled={selected.length === 0}
+            onClick={onCheckout}
+            /* Disabled while a request is in flight, so a double-click cannot
+               fire two hold requests. The second would come back 409 against
+               the user's own hold, which reads as failure. */
+            disabled={selected.length === 0 || pending || !canHold}
+            aria-busy={pending}
+            title={
+              canHold
+                ? undefined
+                : "This is a demo listing — holding seats needs a live event"
+            }
             className="btn-gold inline-flex h-12 items-center gap-2 rounded-xl px-6 text-[15px] font-bold uppercase tracking-wide outline-none transition-[filter,box-shadow,opacity] duration-300 hover:brightness-110 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-black disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:brightness-100"
             style={
-              selected.length > 0
+              selected.length > 0 && canHold && !pending
                 ? { boxShadow: "0 0 40px -12px rgba(250,204,21,0.9)" }
                 : undefined
             }
           >
-            <ShoppingCart className="size-4 shrink-0" aria-hidden="true" />
-            Checkout
+            {pending ? (
+              <>
+                <Loader2 className="size-4 shrink-0 animate-spin" aria-hidden="true" />
+                Securing
+              </>
+            ) : (
+              <>
+                <ShoppingCart className="size-4 shrink-0" aria-hidden="true" />
+                Hold seats
+              </>
+            )}
           </button>
         </div>
       </motion.div>

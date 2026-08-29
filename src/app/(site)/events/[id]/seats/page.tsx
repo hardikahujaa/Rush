@@ -4,8 +4,41 @@ import { notFound } from "next/navigation";
 import { ArrowLeft, CalendarDays, MapPin } from "lucide-react";
 
 import { SeatMap } from "@/components/seats/seat-map";
+import { getSeatMapForEvent, type SeatMapData } from "@/db/queries/seats";
 import { findEvent } from "@/lib/event-lookup";
-import { getSeats, getVenue, seatStats, tierBreakdown } from "@/lib/mock-data";
+import { getSeats, getVenue, tierBreakdown } from "@/lib/mock-data";
+
+/** Same test the event resolver uses: a uuid means Postgres, anything else mock. */
+const UUID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Resolve the seating chart from whichever source owns this event.
+ *
+ * Real events come from Postgres and can be held for real. Mock events come
+ * from `mock-data.ts` and cannot - their seat ids are strings like
+ * `sf-1-pit-A3`, which exist nowhere in the database. `canHold` carries that
+ * distinction to the client so the checkout button can tell the truth rather
+ * than firing a request guaranteed to 404.
+ */
+async function resolveSeatMap(
+  id: string,
+): Promise<(SeatMapData & { canHold: boolean }) | null> {
+  if (UUID.test(id)) {
+    const data = await getSeatMapForEvent(id);
+    return data ? { ...data, canHold: true } : null;
+  }
+
+  const venue = getVenue(id);
+  if (!venue) return null;
+
+  return {
+    venueType: venue.venueType,
+    tiers: tierBreakdown(id),
+    seats: getSeats(id),
+    canHold: false,
+  };
+}
 
 type Props = { params: Promise<{ id: string }> };
 
@@ -35,9 +68,13 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
  * Seat selection.
  *
  * A server component that resolves the event and hands the grid to the client.
- * The seats are read here, on the server, from the same `mock-data.ts` the
- * landing card and the pricing table read - so the number the user saw on the
- * card is the number of gold-bordered squares they can actually click.
+ * The client never generates seats, so there is no second source that could
+ * disagree with the one the hold transaction reads.
+ *
+ * For a database event, seat status is computed from `order_items` and live
+ * holds - the same source of truth `createHold` decides from. That matters: if
+ * the map painted from the `seats.status` cache instead, it could show a seat as
+ * free that the API refuses, or as taken that the API would happily sell.
  */
 export default async function SeatsPage({ params }: Props) {
   const { id } = await params;
@@ -45,8 +82,20 @@ export default async function SeatsPage({ params }: Props) {
 
   if (!event) notFound();
 
-  const venue = getVenue(id);
-  const stats = seatStats(id);
+  const map = await resolveSeatMap(id);
+
+  /* Totals are summed from the tiers rather than queried again, so the header,
+     the legend and the pricing table are all reductions of one set of numbers. */
+  const stats = map
+    ? map.tiers.reduce(
+        (acc, tier) => ({
+          total: acc.total + tier.stats.total,
+          available: acc.available + tier.stats.available,
+          held: acc.held + tier.stats.held,
+        }),
+        { total: 0, available: 0, held: 0 },
+      )
+    : { total: 0, available: 0, held: 0 };
 
   return (
     /* Bottom padding clears the fixed checkout bar. Without it the status key
@@ -78,7 +127,7 @@ export default async function SeatsPage({ params }: Props) {
         </div>
       </header>
 
-      {venue ? (
+      {map ? (
         <>
           <p className="mt-7 text-sm text-muted-foreground">
             <span className="tabular-nums text-foreground">{stats.available}</span> of{" "}
@@ -94,20 +143,21 @@ export default async function SeatsPage({ params }: Props) {
 
           <div className="mt-6">
             <SeatMap
-              venueType={venue.venueType}
-              tiers={tierBreakdown(id)}
-              seats={getSeats(id)}
+              eventId={id}
+              venueType={map.venueType}
+              tiers={map.tiers}
+              seats={map.seats}
+              canHold={map.canHold}
             />
           </div>
         </>
       ) : (
         /*
-          A real database event resolved, but T19's map is still driven by the
-          mock venue table - there is no seating chart for it yet.
+          The event exists but has no seating chart - a database event whose
+          sections were never populated, or a "just announced" mock row.
 
           This says so instead of rendering an empty black box that looks like a
-          bug, and instead of 404ing an event that genuinely exists. When T20
-          wires holds to Postgres, this branch is where the real query lands.
+          bug, and instead of 404ing an event that genuinely exists.
         */
         <div className="glass mt-8 rounded-2xl border-gold/20 px-6 py-12 text-center">
           <p className="text-sm text-foreground">

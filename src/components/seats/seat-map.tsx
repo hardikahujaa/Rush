@@ -1,14 +1,25 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { motion, useReducedMotion } from "framer-motion";
 
 import { CheckoutBar, MAX_SEATS } from "@/components/seats/checkout-bar";
+import { HoldBanner, type HeldSeatView } from "@/components/seats/hold-banner";
 import { SeatButton, keepClearOfCart } from "@/components/seats/seat-button";
 import { TierLegend } from "@/components/seats/tier-legend";
 import { FocalEdge, VenueFrame } from "@/components/seats/venue-frame";
 import type { Seat, TierWithStats, VenueType } from "@/lib/mock-data";
 import { formatPaise } from "@/lib/mock-events";
+
+/** The 200 body from POST /api/holds. */
+type HoldSuccess = {
+  eventId: string;
+  seats: HeldSeatView[];
+  expiresAt: string;
+  totalCents: number;
+  replayed: boolean;
+};
 
 /** Seats grouped into their rows, in front-to-back reading order. */
 type Row = { key: string; label: string; seats: Seat[] };
@@ -42,55 +53,154 @@ function groupRows(tierId: string, seats: Seat[]): Row[] {
  * order to rely on.
  */
 export function SeatMap({
+  eventId,
   venueType,
   tiers,
   seats,
+  canHold,
 }: {
+  eventId: string;
   venueType: VenueType;
   tiers: TierWithStats[];
   seats: Seat[];
+  /** False for mock events, whose seat ids exist nowhere in the database. */
+  canHold: boolean;
 }) {
-  const [selected, setSelected] = useState<Seat[]>([]);
+  const router = useRouter();
+
+  /**
+   * Selection is stored as IDS, not as Seat objects.
+   *
+   * After a conflict the page calls router.refresh(), the `seats` prop arrives
+   * with new statuses, and any Seat object captured in state is now a stale
+   * snapshot claiming "available" about a seat somebody else just bought.
+   * Holding ids and re-reading them from the current prop makes that
+   * impossible: the selection is always described by the freshest data.
+   */
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   /* A counter, not a boolean: re-keying the shake on each refusal is what makes
      the second rejected click animate as well as the first. */
   const [limitHit, setLimitHit] = useState(0);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [held, setHeld] = useState<HoldSuccess | null>(null);
+  /* Seats this browser holds. Rendered distinctly so they are not mistaken for
+     a stranger's amber hold on the refreshed map. */
+  const [mine, setMine] = useState<Set<string>>(new Set());
   const reduceMotion = useReducedMotion();
 
   const tiersById = useMemo(
     () => new Map(tiers.map((tier) => [tier.id, tier])),
     [tiers],
   );
-  const selectedIds = useMemo(
+  const seatsById = useMemo(
+    () => new Map(seats.map((seat) => [seat.id, seat])),
+    [seats],
+  );
+
+  /**
+   * RECONCILED DURING RENDER, NOT IN AN EFFECT.
+   *
+   * When refreshed data says a selected seat is gone, it has to leave the
+   * selection. Doing that in a useEffect would mean one render where the cart
+   * still totals a seat the user cannot have - and it trips React 19's
+   * `set-state-in-effect` rule, which has already fired twice in this project.
+   * Deriving it costs nothing and is correct on the very first render.
+   */
+  const selected = useMemo(
+    () =>
+      selectedIds
+        .map((id) => seatsById.get(id))
+        .filter((seat): seat is Seat => seat?.status === "available"),
+    [selectedIds, seatsById],
+  );
+  const selectedSet = useMemo(
     () => new Set(selected.map((seat) => seat.id)),
     [selected],
   );
 
   function toggle(seat: Seat) {
-    setSelected((current) => {
-      const existing = current.findIndex((s) => s.id === seat.id);
-      if (existing !== -1) {
+    setError(null);
+    setSelectedIds((current) => {
+      if (current.includes(seat.id)) {
         setLimitHit(0); // freeing a seat clears the refusal notice
-        return current.filter((s) => s.id !== seat.id);
+        return current.filter((id) => id !== seat.id);
       }
-      if (current.length >= MAX_SEATS) {
+      if (selected.length >= MAX_SEATS) {
         setLimitHit((n) => n + 1);
         return current; // the click is refused, not queued
       }
-      return [...current, seat];
+      return [...current, seat.id];
     });
   }
 
   function remove(seat: Seat) {
     setLimitHit(0);
-    setSelected((current) => current.filter((s) => s.id !== seat.id));
+    setSelectedIds((current) => current.filter((id) => id !== seat.id));
   }
 
   /** One admission from a standing tier: the next unclaimed spot in the zone. */
   function addStanding(tierId: string) {
     const next = seats.find(
-      (s) => s.tierId === tierId && s.status === "available" && !selectedIds.has(s.id),
+      (s) => s.tierId === tierId && s.status === "available" && !selectedSet.has(s.id),
     );
     if (next) toggle(next);
+  }
+
+  /**
+   * Claim the selected seats for real.
+   *
+   * Nothing about the outcome is decided here. The server owns the answer, and
+   * this only translates it - which is the point: an optimistic UI that assumed
+   * success would show four secured seats to two different people.
+   */
+  async function submitHold() {
+    if (selected.length === 0 || pending) return;
+
+    setPending(true);
+    setError(null);
+
+    try {
+      const response = await fetch("/api/holds", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ seatIds: selected.map((seat) => seat.id) }),
+      });
+
+      /* Signed out - send them to log in and bring them straight back. The API
+         answers 401 rather than redirecting precisely so this choice is ours to
+         make; a 307 would have had fetch() silently parse a login page. */
+      if (response.status === 401) {
+        router.push(`/login?next=/events/${eventId}/seats`);
+        return;
+      }
+
+      const data = await response.json().catch(() => null);
+
+      if (!response.ok) {
+        setError(
+          data?.error?.message ??
+            "Could not hold those seats. Please try again.",
+        );
+        /* Re-pull the real map. Whatever went wrong, the seats on screen are
+           now known to be out of date. */
+        router.refresh();
+        return;
+      }
+
+      setHeld(data as HoldSuccess);
+      setMine(new Set((data as HoldSuccess).seats.map((s) => s.seatId)));
+      setSelectedIds([]);
+      setLimitHit(0);
+      router.refresh();
+    } catch {
+      // A network failure is genuinely unknown: the hold may or may not exist.
+      // Refreshing is what turns "unknown" back into "whatever the server says".
+      setError("Network problem — check your connection and try again.");
+      router.refresh();
+    } finally {
+      setPending(false);
+    }
   }
 
   return (
@@ -200,7 +310,8 @@ export function SeatMap({
                               <SeatButton
                                 seat={seat}
                                 tier={tier}
-                                selected={selectedIds.has(seat.id)}
+                                selected={selectedSet.has(seat.id)}
+                                mine={mine.has(seat.id)}
                                 onToggle={toggle}
                               />
                             </SeatWrapper>
@@ -229,14 +340,34 @@ export function SeatMap({
           swatch={{ backgroundColor: "#000000", borderColor: "rgba(255,255,255,0.05)" }}
           label="Sold"
         />
+        {mine.size > 0 && (
+          <Key
+            swatch={{ backgroundColor: "rgba(250,204,21,0.28)", borderColor: "#FACC15" }}
+            label="Held by you"
+          />
+        )}
       </ul>
 
-      <CheckoutBar
-        selected={selected}
-        tiersById={tiersById}
-        onRemove={remove}
-        limitHit={limitHit}
-      />
+      {held ? (
+        <HoldBanner
+          seats={held.seats}
+          expiresAtIso={held.expiresAt}
+          totalCents={held.totalCents}
+          eventId={eventId}
+          replayed={held.replayed}
+        />
+      ) : (
+        <CheckoutBar
+          selected={selected}
+          tiersById={tiersById}
+          onRemove={remove}
+          limitHit={limitHit}
+          onCheckout={submitHold}
+          pending={pending}
+          error={error}
+          canHold={canHold}
+        />
+      )}
     </>
   );
 }

@@ -353,7 +353,7 @@ reserved, so two people can select the same seat until the hold API exists.
 
 ---
 
-### ☐ T20 🔴 — The hold API (the heart of the project)
+### ☑ T20 🔴 — The hold API (the heart of the project)
 
 **Prompt (Plan Mode — and read the explanation twice):**
 
@@ -366,6 +366,38 @@ reserved, so two people can select the same seat until the hold API exists.
 > Handle the unique-index violation on `one_live_hold_per_seat` gracefully as a 409.
 >
 > Then explain to me: what a transaction is, what `FOR UPDATE` does, what a race condition is, and why ordering the seat ids prevents deadlock.
+
+**Done.** `src/db/queries/holds.ts` holds the transaction; `src/app/api/holds/route.ts`
+is the endpoint. Verified by `scripts/hold-test.ts`, which imports the real
+`createHold` rather than re-implementing it (20 checks, including six different
+users racing one seat: exactly one winner).
+
+Three deviations from the prompt, each one a defect the literal spec would ship:
+
+1. **Availability is read from the source of truth, never `seats.status`.** An
+   expired hold leaves `status='held'` behind, so checking the cache would make
+   every expired seat permanently unsellable. The decision reads `order_items`
+   and live unexpired holds; `seats.status` is still written as the render cache
+   but never read.
+
+2. **Expired holds are released inside the transaction, before the insert.**
+   `one_live_hold_per_seat` is unique on `seat_id WHERE released_at IS NULL`, and
+   an expired hold still has `released_at IS NULL` — so without this the insert
+   dies on a 23505 for a seat every availability query calls free. Proven by
+   deleting the step and re-running: the expiry test fails exactly as predicted.
+
+3. **The SQL `ORDER BY s.id` is what orders the locks, not the JS sort.**
+   `EXPLAIN` shows `LockRows` above the index scan, so lock order is the scan's
+   emission order. The JS sort is kept for de-duplication.
+
+Also stricter than asked: the 4-seat cap counts a user's live holds **per event**,
+not per request, and the endpoint refuses events that have not dropped — both
+close scalping holes a per-request cap leaves open. A retry that finds the
+caller's own holds returns 200, not 409.
+
+**Not yet verified by me:** the signed-in browser path (button → 200 → countdown).
+It needs a real login, which I do not perform. The 401 branch is verified: the
+button POSTs real seat uuids and lands on `/login?next=…`.
 
 **Verify:** hold a seat via the UI, check the `holds` table in Supabase.
 **Commit:** `feat: seat hold API with row locking`
