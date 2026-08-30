@@ -523,11 +523,41 @@ Five pass the limiter and fail auth; the sixth is bounced **before any Postgres
 connection opens**. That boundary is the evidence the limiter sits above the database
 work, and it needs no login to demonstrate.
 
-**ACTION REQUIRED: no Upstash database exists yet.** `UPSTASH_REDIS_REST_URL` and
-`UPSTASH_REDIS_REST_TOKEN` are present in `.env.local` but **empty**. Until you create a
-database and paste the values in, the limiter runs on an in-memory fallback that counts a
-single Node process — fine for local demos, **not a production shield**, because Vercel
-runs many instances and each keeps its own count. It logs a warning saying so on first use.
+**FINALIZED — running on live Upstash.** Credentials are populated and verified; the
+limiter is on the edge network, not the in-memory fallback.
+
+*Proof it is really Redis, not a per-process counter:*
+
+    npm run ratelimit-shared
+    pid 27472 spends all 5 requests -> dev server (different pid) refuses the 6th with 429
+
+A `Map` is not shared between OS processes. The dev server could only refuse that request
+by reading a counter the script process wrote outside both of them. Latency alone would
+have been weak evidence; this is not. Corroborated by the key appearing in Upstash
+(`rush:ratelimit:holds:ip:<addr>:<window>`, type string, ttl 4s) and by measured latency
+of 104–123 ms per allowed request versus ~0 ms for in-memory.
+
+*Two hazards the finalization audit found and fixed:*
+
+1. **`timeout` defaulted to 5000 ms.** On a slow Upstash, every request — including
+   legitimate ones — would have waited five seconds and then been allowed through. During
+   a drop that is worse than no limiter: the shield stops shedding load and starts adding
+   it. Now `1000`, which is >4× the worst measured latency (218 ms), so it never fires
+   normally and caps an outage at one second.
+2. **Every refusal cost a full round trip.** A bot hammering the endpoint made the server
+   pay ~92 ms each time it said no. `ephemeralCache` now remembers a blocked identifier
+   locally until the reset timestamp Redis returned. Visible in the test output: the last
+   two 429s land at 54 ms and 49 ms against 104–123 ms for Redis-consulting requests.
+
+3. **Production now fails fast when unconfigured.** `redis.ts` throws at module load if
+   `NODE_ENV === "production"` and either variable is missing. A forgotten env var on
+   Vercel used to mean a silent per-instance counter that looked like protection. Local
+   development keeps the in-memory fallback, so the repo still runs without credentials.
+
+*Step-3 completion audit — all three already correct, no changes needed:* identifier is
+the verified JWT `sub` (`route.ts:111`), the limiter runs before `getCurrentUser()`
+(L134 vs L162), the 429 branch does not call `router.refresh()`, and the button disables
+with the polite message announced through a live region.
 
 Deviations, each deliberate:
 

@@ -29,6 +29,7 @@ function check(name: string, ok: boolean, detail = "") {
 
 /** One request. `xff` lets us pretend to be a different caller. */
 async function attempt(xff: string) {
+  const started = performance.now();
   const response = await fetch(`${BASE}/api/holds`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-forwarded-for": xff },
@@ -39,6 +40,7 @@ async function attempt(xff: string) {
     retryAfter: response.headers.get("Retry-After"),
     limit: response.headers.get("RateLimit-Limit"),
     remaining: response.headers.get("RateLimit-Remaining"),
+    ms: Math.round(performance.now() - started),
     body: await response.json().catch(() => null),
   };
 }
@@ -46,6 +48,13 @@ async function attempt(xff: string) {
 async function main() {
   console.log(`\n  backend: ${isRedisConfigured ? "redis (upstash)" : "in-memory (dev)"}`);
   console.log(`  limit  : ${HOLD_RATE_LIMIT} requests per 10 s per identifier\n`);
+
+  /* The backend is not a footnote. An in-memory limiter passes almost every
+     check below while protecting nothing across instances, so the run states
+     which one it actually exercised and fails if Redis is absent. A green test
+     against the wrong backend is worse than a red one. */
+  check("running against Upstash Redis, not the in-memory fallback",
+    isRedisConfigured, "UPSTASH_REDIS_REST_URL / _TOKEN are not set");
 
   /* A unique address per run, so a re-run is not throttled by the previous. */
   const caller = `203.0.113.${Math.floor(Math.random() * 200) + 1}`;
@@ -55,6 +64,14 @@ async function main() {
   const results = [];
   for (let i = 0; i < ATTEMPTS; i++) results.push(await attempt(caller));
   console.log(`   statuses: ${results.map((r) => r.status).join(" ")}`);
+  console.log(`   latency : ${results.map((r) => r.ms + "ms").join(" ")}`);
+
+  /* Evidence the check crossed a network. An in-memory counter answers in
+     roughly zero milliseconds; a REST call to Upstash cannot. */
+  const allowedLatency = results.filter((r) => r.status !== 429).map((r) => r.ms);
+  const median = allowedLatency.sort((a, b) => a - b)[Math.floor(allowedLatency.length / 2)];
+  check("limited requests show real network latency (not ~0ms in-memory)",
+    !isRedisConfigured || median >= 20, `median ${median}ms for allowed requests`);
 
   const allowed = results.filter((r) => r.status !== 429);
   const blocked = results.filter((r) => r.status === 429);
