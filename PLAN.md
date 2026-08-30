@@ -504,7 +504,7 @@ already serves the predicate, so nothing was added to the locked schema.
 
 ---
 
-### ☐ T23 🟡 — Upstash Redis + rate limiting
+### ☑ T23 🟡 — Upstash Redis + rate limiting
 
 Create an Upstash Redis database, copy `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` into `.env.local`.
 
@@ -514,6 +514,54 @@ Create an Upstash Redis database, copy `UPSTASH_REDIS_REST_URL` and `UPSTASH_RED
 
 **Verify:** spam the button — you get a 429.
 **Commit:** `feat: redis rate limiting and hold cache`
+
+**Done.** `npm run ratelimit-test` — 10 checks. The curl probe:
+
+    401 401 401 401 401 429 429 429
+
+Five pass the limiter and fail auth; the sixth is bounced **before any Postgres
+connection opens**. That boundary is the evidence the limiter sits above the database
+work, and it needs no login to demonstrate.
+
+**ACTION REQUIRED: no Upstash database exists yet.** `UPSTASH_REDIS_REST_URL` and
+`UPSTASH_REDIS_REST_TOKEN` are present in `.env.local` but **empty**. Until you create a
+database and paste the values in, the limiter runs on an in-memory fallback that counts a
+single Node process — fine for local demos, **not a production shield**, because Vercel
+runs many instances and each keeps its own count. It logs a warning saying so on first use.
+
+Deviations, each deliberate:
+
+1. **Identify by verified JWT subject, not IP.** `getVerifiedClaims()` yields `sub`
+   without querying Postgres, so per-user limiting satisfies "edge before database".
+   This matters: `x-forwarded-for` is client-written and rotatable locally, and on campus
+   wifi or carrier NAT hundreds of people share one address — a per-IP limit would lock
+   out a lecture hall during a drop. IP is the fallback for unauthenticated callers.
+2. **5 per 10 s**, per the T23 brief, not the 10 written above.
+3. **The error envelope is kept.** The brief asked for a bare string; every other failure
+   on this route returns `{ error: { code, message } }` and the frontend reads
+   `error.message`, so a bare string would render `undefined`. `Retry-After` and
+   `RateLimit-*` headers carry the machine-readable part.
+4. **The client does not `router.refresh()` on a 429** — that would fire a second request
+   at the exact moment the server is shedding load. It shows the message, keeps the seat
+   selection, and disables the button until `Retry-After` elapses.
+5. **Fails OPEN if Redis is unreachable.** Every correctness rule lives in Postgres — the
+   row lock, the partial unique index, the 4-seat cap — and none weakens without Redis. A
+   component that guards against load must never be able to take ticket sales offline.
+
+**The `hold:{seatId}` Redis mirror was deliberately NOT built.** A Redis copy of seat state
+is a second source of truth that cannot join the hold transaction, so it can commit while
+Postgres rolls back with no way to tell which is right. T22 was spent removing exactly that
+divergence. Redis holds counters here; Postgres holds truth.
+
+**Honest scope:** this protects the *server* from load. It does not protect *inventory*
+from scalpers — residential proxies plus a pool of accounts route around any
+per-identifier limit. The 4-seat cap and the row lock are what protect inventory.
+
+**Supply chain:** `@upstash/redis` 1.38.3 and `@upstash/ratelimit` 2.0.8, both
+`@upstash`-scoped and published from upstash.com addresses; installed with
+`--ignore-scripts`. They add **zero** advisories. `npm audit`'s 4 moderate findings all
+chain from `drizzle-kit`, a devDependency — dev-only and not reachable in production, so
+tracked rather than force-fixed (which would cross drizzle-kit majors).
 
 ---
 

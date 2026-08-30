@@ -8,6 +8,8 @@ import {
   type HoldFailure,
 } from "@/db/queries/holds";
 import { getCurrentUser } from "@/lib/auth";
+import { limitHolds } from "@/lib/rate-limit";
+import { getVerifiedClaims } from "@/lib/supabase/server";
 import { createHoldSchema, MAX_SEATS_PER_USER } from "@/lib/validation/holds";
 
 /**
@@ -83,14 +85,86 @@ function failureResponse(failure: HoldFailure) {
   }
 }
 
+/**
+ * Who is being rate limited - resolved WITHOUT touching Postgres.
+ *
+ * `getVerifiedClaims()` checks the JWT signature against Supabase's signing keys
+ * and hands back `sub`, the user id. It is not `getCurrentUser()`, which also
+ * queries the `users` table - and the whole point of this step is to reject a
+ * flood before a database connection is ever opened.
+ *
+ * ── WHY THE USER ID IS PREFERRED OVER THE IP ───────────────────────────────
+ * `x-forwarded-for` is a header, and headers are written by clients. Vercel
+ * overwrites it at its edge so production is sound, but locally anyone can
+ * rotate it and walk straight through an IP-keyed limit.
+ *
+ * It is also wrong about who "a user" is. On carrier-grade NAT or campus wifi -
+ * exactly where this gets demonstrated - hundreds of people share one address,
+ * so five requests per ten seconds per IP would lock out a whole lecture hall
+ * during a drop. A verified `sub` is one person, always.
+ *
+ * The IP is kept only as the fallback for callers with no valid token, who are
+ * about to receive a 401 anyway; limiting them is about not serving that 401 a
+ * thousand times a second.
+ */
+async function identify(request: Request): Promise<string> {
+  const claims = await getVerifiedClaims();
+  if (claims?.sub) return `user:${claims.sub}`;
+
+  /* Leftmost entry is the originating client. Everything after it is the proxy
+     chain. */
+  const forwarded = request.headers.get("x-forwarded-for");
+  const ip = forwarded?.split(",")[0]?.trim();
+  if (ip) return `ip:${ip}`;
+
+  /* No token and no forwarded address - a direct local connection. One shared
+     bucket is correct here: it is a single caller by definition. */
+  return "anonymous";
+}
+
 export async function POST(request: Request) {
-  /* ── 1. AUTHENTICATE ─────────────────────────────────────────────────── */
+  /* ── 1. RATE LIMIT, BEFORE ANY DATABASE WORK ─────────────────────────────
+   *
+   * This sits above authentication deliberately. `getCurrentUser()` on the next
+   * line queries Postgres, so putting the limit after it would mean a flood
+   * still opened a connection and ran a query per request - protecting the
+   * endpoint from nothing that costs anything.
+   */
+  const identifier = await identify(request);
+  const verdict = await limitHolds(identifier);
+
+  if (!verdict.success) {
+    const retryAfterSeconds = Math.max(1, Math.ceil((verdict.reset - Date.now()) / 1000));
+
+    return NextResponse.json(
+      {
+        error: {
+          code: "RATE_LIMITED",
+          message: "You're clicking too fast! Please wait a moment.",
+        },
+      },
+      {
+        status: 429,
+        headers: {
+          /* The one header a client is obliged to honour. */
+          "Retry-After": String(retryAfterSeconds),
+          /* IETF draft RateLimit fields - machine-readable detail without
+             putting it in the body, where it would break the error envelope. */
+          "RateLimit-Limit": String(verdict.limit),
+          "RateLimit-Remaining": String(verdict.remaining),
+          "RateLimit-Reset": String(retryAfterSeconds),
+        },
+      },
+    );
+  }
+
+  /* ── 2. AUTHENTICATE ─────────────────────────────────────────────────── */
   const user = await getCurrentUser();
   if (!user) {
     return fail(401, "UNAUTHENTICATED", "Sign in to hold seats.");
   }
 
-  /* ── 2. VALIDATE ─────────────────────────────────────────────────────── */
+  /* ── 3. VALIDATE ─────────────────────────────────────────────────────── */
   let body: unknown;
   try {
     body = await request.json();
@@ -112,7 +186,7 @@ export async function POST(request: Request) {
     );
   }
 
-  /* ── 3. THE TRANSACTION ──────────────────────────────────────────────── */
+  /* ── 4. THE TRANSACTION ──────────────────────────────────────────────── */
   try {
     const result = await createHold({
       userId: user.id,

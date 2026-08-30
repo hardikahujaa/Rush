@@ -87,6 +87,9 @@ export function SeatMap({
   /* Seats this browser holds. Rendered distinctly so they are not mistaken for
      a stranger's amber hold on the refreshed map. */
   const [mine, setMine] = useState<Set<string>>(new Set());
+  /* Unix ms until which the Hold button stays disabled after a 429. Zero means
+     no cooldown is running. */
+  const [cooldownUntil, setCooldownUntil] = useState(0);
   const reduceMotion = useReducedMotion();
 
   const tiersById = useMemo(
@@ -155,7 +158,7 @@ export function SeatMap({
    * success would show four secured seats to two different people.
    */
   async function submitHold() {
-    if (selected.length === 0 || pending) return;
+    if (selected.length === 0 || pending || Date.now() < cooldownUntil) return;
 
     setPending(true);
     setError(null);
@@ -176,6 +179,28 @@ export function SeatMap({
       }
 
       const data = await response.json().catch(() => null);
+
+      /* Rate limited. Handled apart from every other failure for two reasons.
+         
+         First, it must NOT refresh: a 429 means the server is shedding load, and
+         firing a second request at that exact moment is the client amplifying
+         the storm it was just told to stop. Nothing about the seats changed
+         either, so there is nothing to re-fetch.
+         
+         Second, without a cooldown the user simply clicks again and collects
+         another 429. Honouring Retry-After turns "you are going too fast" into
+         the button actually not being clickable until it is safe. */
+      if (response.status === 429) {
+        const retryAfter = Number(response.headers.get("Retry-After")) || 5;
+        setError(
+          data?.error?.message ?? "You're clicking too fast! Please wait a moment.",
+        );
+        setCooldownUntil(Date.now() + retryAfter * 1000);
+        /* Set from an event handler, not a render-phase effect - React 19's
+           set-state-in-effect rule has already fired twice in this project. */
+        window.setTimeout(() => setCooldownUntil(0), retryAfter * 1000);
+        return;
+      }
 
       if (!response.ok) {
         setError(
@@ -364,6 +389,7 @@ export function SeatMap({
           limitHit={limitHit}
           onCheckout={submitHold}
           pending={pending}
+          coolingDown={cooldownUntil > 0}
           error={error}
           canHold={canHold}
         />

@@ -31,6 +31,7 @@ export function CheckoutBar({
   limitHit,
   onCheckout,
   pending,
+  coolingDown,
   error,
   canHold,
 }: {
@@ -42,6 +43,8 @@ export function CheckoutBar({
   onCheckout: () => void;
   /** A request is in flight. The button must not fire twice. */
   pending: boolean;
+  /** A 429 cooldown is running - the button stays disabled until it clears. */
+  coolingDown: boolean;
   /** Server-supplied failure text, already human-readable. */
   error: string | null;
   /** False for mock events, which have no database seats to hold. */
@@ -164,7 +167,7 @@ export function CheckoutBar({
             /* Disabled while a request is in flight, so a double-click cannot
                fire two hold requests. The second would come back 409 against
                the user's own hold, which reads as failure. */
-            disabled={selected.length === 0 || pending || !canHold}
+            disabled={selected.length === 0 || pending || coolingDown || !canHold}
             aria-busy={pending}
             title={
               canHold
@@ -173,7 +176,7 @@ export function CheckoutBar({
             }
             className="btn-gold inline-flex h-12 items-center gap-2 rounded-xl px-6 text-[15px] font-bold uppercase tracking-wide outline-none transition-[filter,box-shadow,opacity] duration-300 hover:brightness-110 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-black disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:brightness-100"
             style={
-              selected.length > 0 && canHold && !pending
+              selected.length > 0 && canHold && !pending && !coolingDown
                 ? { boxShadow: "0 0 40px -12px rgba(250,204,21,0.9)" }
                 : undefined
             }
