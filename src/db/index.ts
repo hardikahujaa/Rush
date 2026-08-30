@@ -22,6 +22,16 @@ import * as schema from "./schema";
  *   fewer. One connection per instance, returned to the pooler immediately, is
  *   what scales.
  *
+ * `DB_POOL_MAX`
+ *   An escape hatch for the concurrency tests, and nothing else. The defaults
+ *   above are right for serving requests but wrong for PROVING the seat lock:
+ *   fire fifty simultaneous hold attempts at a pool of five and forty-five of
+ *   them never reach the database until the winner has already committed. They
+ *   would come back "seat taken" by simply reading a taken seat, so the run
+ *   looks like a passing race test while barely touching the lock.
+ *   `scripts/race-test.ts` sets this to 50 so all fifty transactions are open at
+ *   once. Unset - which is every other code path - changes nothing.
+ *
  * The `globalThis` caching below is a development-only concern: Next.js hot
  * reload re-evaluates this module on every save, and without the cache each save
  * would open a fresh pool and leak the previous one until you exhausted the
@@ -39,11 +49,15 @@ const globalForDb = globalThis as unknown as {
   conn: postgres.Sql | undefined;
 };
 
+const poolMax =
+  Number(process.env.DB_POOL_MAX) ||
+  (process.env.NODE_ENV === "production" ? 1 : 5);
+
 const conn =
   globalForDb.conn ??
   postgres(connectionString, {
     prepare: false,
-    max: process.env.NODE_ENV === "production" ? 1 : 5,
+    max: poolMax,
   });
 
 if (process.env.NODE_ENV !== "production") globalForDb.conn = conn;

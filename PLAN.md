@@ -404,7 +404,7 @@ button POSTs real seat uuids and lands on `/login?next=…`.
 
 ---
 
-### ☐ T21 🔴 — Prove it works under contention
+### ☑ T21 🔴 — Prove it works under contention
 
 **Prompt:**
 
@@ -414,6 +414,42 @@ button POSTs real seat uuids and lands on `/login?next=…`.
 **Commit:** `test: concurrent hold race test`
 
 > 📸 **Screenshot this output.** It goes in your README and your presentation.
+
+**Done — scaled to 50 users, not 20.** `npm run race-test`.
+
+    Successes (Winners) :  1     Conflicts (Losers) : 49     Server Errors : 0
+    peak concurrent transactions   50 of 50
+    all 50 fired within            0.9 ms
+    total wall time                10493 ms   (p50 5617 ms / max 10492 ms)
+    DB VERIFICATION: 1 LIVE HOLD VERIFIED. ZERO OVERSELLS.
+
+Three corrections to the brief, each one the difference between proof and theatre:
+
+1. **Fifty invented uuids would prove nothing.** `holds.user_id` is a foreign key to
+   `public.users`, so fabricated ids fail with 23503 — the run would read 0 winners /
+   0 conflicts / 50 errors, which looks like a broken lock. The script creates fifty
+   real users and deletes them. Safe: `public.users` has no FK to `auth.users`, and
+   the delete-sync trigger runs auth → public only.
+2. **A pool of 5 makes "50 simultaneous" false.** Forty-five calls would never reach
+   the database until the winner had committed, so they would "lose" by reading an
+   already-taken seat rather than by contending. `DB_POOL_MAX` (added to
+   `src/db/index.ts`, default unchanged) lets all fifty open at once — measured and
+   reported as **50 of 50**, not assumed.
+3. **The target seat is chosen by the source of truth**, not `status = 'available'`.
+   The cache lags, and a stale 'held' would hand the test a taken seat and report a
+   false failure.
+
+**NEGATIVE CONTROL — the run that makes the green run mean something.** With
+`.for("update")` removed and nothing else changed:
+
+    Successes: 1   Conflicts: 34   Server Errors: 15   →  FAILED, exit 1
+
+The fifteen errors are unique-violations on `one_live_hold_per_seat`: without the row
+lock, fifteen transactions passed the availability check simultaneously and collided at
+the insert. **Still exactly one live hold** — layer 2 held the line when layer 1 was
+removed, which is the defence-in-depth the schema was designed around. Note also the
+wall time: 1.5s unlocked versus 10.5s locked. The lock buys correctness and clean
+"seat taken" messages, and pays for it in queueing.
 
 ---
 
