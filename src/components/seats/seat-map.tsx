@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { motion, useReducedMotion } from "framer-motion";
 
@@ -58,6 +58,7 @@ export function SeatMap({
   tiers,
   seats,
   canHold,
+  initialHold,
 }: {
   eventId: string;
   venueType: VenueType;
@@ -65,6 +66,15 @@ export function SeatMap({
   seats: Seat[];
   /** False for mock events, whose seat ids exist nowhere in the database. */
   canHold: boolean;
+  /**
+   * The caller's live hold, read from Postgres by the server component.
+   *
+   * This is what makes the countdown survive a refresh. Without it the timer
+   * lived only in the state below, so one F5 wiped it while the database went
+   * on holding the seats for another nine minutes - and the buyer, seeing
+   * nothing, would reasonably assume the hold was gone.
+   */
+  initialHold: HoldSuccess | null;
 }) {
   const router = useRouter();
 
@@ -83,10 +93,14 @@ export function SeatMap({
   const [limitHit, setLimitHit] = useState(0);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [held, setHeld] = useState<HoldSuccess | null>(null);
+  const [held, setHeld] = useState<HoldSuccess | null>(initialHold);
   /* Seats this browser holds. Rendered distinctly so they are not mistaken for
      a stranger's amber hold on the refreshed map. */
-  const [mine, setMine] = useState<Set<string>>(new Set());
+  /* Seeded from the restored hold too, so after a refresh the user's seats
+     still render as THEIRS (gold) rather than as a stranger's amber hold. */
+  const [mine, setMine] = useState<Set<string>>(
+    () => new Set(initialHold?.seats.map((s) => s.seatId) ?? []),
+  );
   /* Unix ms until which the Hold button stays disabled after a 429. Zero means
      no cooldown is running. */
   const [cooldownUntil, setCooldownUntil] = useState(0);
@@ -149,6 +163,32 @@ export function SeatMap({
     );
     if (next) toggle(next);
   }
+
+  /**
+   * The hold ran out.
+   *
+   * Called once by HoldBanner when its countdown reaches zero. Everything here
+   * is about not leaving the user holding a lie: the cart is emptied because
+   * those seats are no longer theirs, `mine` is dropped so they stop rendering
+   * as gold, and the router refresh re-reads Postgres so the map repaints them
+   * as available.
+   *
+   * That last step is where T22 pays off visibly. No cron job released
+   * anything - the seats simply stopped satisfying `expires_at > now()`, so the
+   * very next read returns them as free.
+   *
+   * `useCallback` because it is an effect dependency in the banner; a fresh
+   * identity each render would re-run that effect on every tick.
+   */
+  const handleExpiry = useCallback(() => {
+    setSelectedIds([]);
+    setMine(new Set());
+    setLimitHit(0);
+    /* `held` is deliberately NOT cleared. The banner needs to stay mounted to
+       show its expired state - clearing it would make the bar vanish at the
+       exact moment the user needs telling why their seats went. */
+    router.refresh();
+  }, [router]);
 
   /**
    * Claim the selected seats for real.
@@ -380,6 +420,7 @@ export function SeatMap({
           totalCents={held.totalCents}
           eventId={eventId}
           replayed={held.replayed}
+          onExpire={handleExpiry}
         />
       ) : (
         <CheckoutBar

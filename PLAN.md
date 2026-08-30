@@ -595,13 +595,57 @@ tracked rather than force-fixed (which would cross drizzle-kit majors).
 
 ---
 
-### ☐ T24 🟡 — Hold countdown UI
+### ☑ T24 🟡 — Hold countdown UI
 
 **Prompt:**
 
 > When the user holds seats, show a countdown ring (SVG circle with animated stroke-dashoffset) ticking down from 10 minutes. At 60 seconds turn it red and pulse. At zero, release the hold and refresh the seat map. Add a "Release seats" button. Use optimistic UI so seats respond instantly on click.
 
 **Commit:** `feat: hold countdown`
+
+**Done.** `npm run countdown-test` — 10 checks.
+
+**Reload safety is the substance of this task, and it reads from Postgres, not
+localStorage.** `getActiveHoldsForUser(userId, eventId)` is called by the seats page and
+seeds the timer, so a refresh resumes at the correct remaining time instead of vanishing
+while the database holds the seats for another nine minutes. localStorage was rejected for
+one specific reason, and the test asserts it: **an expired hold returns null while its row
+still exists, unreleased** — a cached `expiresAt` cannot know the hold died, so it would
+count down seats released twenty minutes ago and offer Proceed to Payment for tickets
+nobody owns. `mine` is restored from the same read, so the user's seats stay gold after a
+refresh rather than reverting to a stranger's amber.
+
+**Corrections to today's brief:**
+
+1. **The pulse is on a dot, not the digits.** Measured on the live page, `animate-pulse`
+   fades its target to 50% opacity, taking the red timer from **5.57:1 to 2.04:1** — under
+   even the 3:1 large-text floor — for half of every cycle, at the moment the number matters
+   most. The dot carries no information, so it can blink freely. Gated on `useReducedMotion`;
+   Tailwind's `animate-pulse` does not respect `prefers-reduced-motion` on its own.
+2. **Kept `useSyncExternalStore`** rather than `useEffect` + `setInterval`. With an effect the
+   first render — server *and* hydration — computes `expiresAt - Date.now()`, and those
+   clocks never agree: a hydration mismatch on the one number the user is trusting.
+3. **`text-destructive`, not `text-red-500`.** Both pass (5.57 vs 5.58:1 on black), so this is
+   consistency with the project's own semantic token, not a compliance fix.
+
+**Divergence from the prompt written above, which today's brief superseded:**
+
+- **No SVG countdown ring.** The brief specified a text timer with a 120-second urgency
+  threshold; the ring and its 60-second threshold were not requested. The ring is additive
+  and can be layered on later without touching the engine.
+- **No "Release seats" button.** It cannot exist yet — there is no release endpoint. That is
+  **T25**, immediately below, and the button belongs with it.
+- **Optimistic UI applies to selection only, deliberately.** Clicking a seat is instant
+  because it is local state. The *hold* is never optimistic: showing seats as secured before
+  Postgres has taken the row lock is exactly the lie T20 exists to prevent.
+
+The payment CTA reads **"Proceed to Payment →"** as specified but stays disabled with a
+visible "Checkout opens in T25" note beneath it — a demo whose most urgent button silently
+does nothing is worse than one that says why.
+
+**Testing the timer without waiting ten minutes:** `npm run expire-hold -- 130` crosses the
+urgency line, `npm run expire-hold -- 5` reaches zero. Both rewrite `expires_at` on your live
+hold and print what the page would read back.
 
 ---
 

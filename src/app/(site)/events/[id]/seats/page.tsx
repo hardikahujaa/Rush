@@ -4,7 +4,9 @@ import { notFound } from "next/navigation";
 import { ArrowLeft, CalendarDays, MapPin } from "lucide-react";
 
 import { SeatMap } from "@/components/seats/seat-map";
+import { getActiveHoldsForUser } from "@/db/queries/holds";
 import { getSeatMapForEvent, type SeatMapData } from "@/db/queries/seats";
+import { getCurrentUser } from "@/lib/auth";
 import { findEvent } from "@/lib/event-lookup";
 import { getSeats, getVenue, tierBreakdown } from "@/lib/mock-data";
 
@@ -84,6 +86,20 @@ export default async function SeatsPage({ params }: Props) {
 
   const map = await resolveSeatMap(id);
 
+  /**
+   * Resume an in-flight hold, read from Postgres rather than the browser.
+   *
+   * The countdown has to survive a refresh, and the database is the only place
+   * that actually knows. localStorage would be the obvious shortcut and the
+   * wrong one - it can outlive the hold it describes, so a user returning
+   * twenty minutes later would watch a timer count down seats that were
+   * released long ago.
+   *
+   * Only for real events: a mock seat id exists nowhere in `holds`.
+   */
+  const user = map?.canHold ? await getCurrentUser() : null;
+  const initialHold = user ? await getActiveHoldsForUser(user.id, id) : null;
+
   /* Totals are summed from the tiers rather than queried again, so the header,
      the legend and the pricing table are all reductions of one set of numbers. */
   const stats = map
@@ -148,6 +164,17 @@ export default async function SeatsPage({ params }: Props) {
               tiers={map.tiers}
               seats={map.seats}
               canHold={map.canHold}
+              initialHold={
+                initialHold
+                  ? {
+                      eventId: initialHold.eventId,
+                      seats: initialHold.seats,
+                      expiresAt: initialHold.expiresAt.toISOString(),
+                      totalCents: initialHold.totalCents,
+                      replayed: initialHold.replayed,
+                    }
+                  : null
+              }
             />
           </div>
         </>

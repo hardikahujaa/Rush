@@ -1,8 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useSyncExternalStore } from "react";
-import { CheckCircle2, Clock } from "lucide-react";
+import { useEffect, useRef, useSyncExternalStore } from "react";
+import { useReducedMotion } from "framer-motion";
+import { ArrowRight, CheckCircle2, Clock } from "lucide-react";
 
 import { formatPaise } from "@/lib/mock-events";
 
@@ -58,6 +59,7 @@ export function HoldBanner({
   totalCents,
   eventId,
   replayed,
+  onExpire,
 }: {
   seats: HeldSeatView[];
   expiresAtIso: string;
@@ -65,7 +67,10 @@ export function HoldBanner({
   eventId: string;
   /** True when the hold already existed - a retry, not a fresh claim. */
   replayed: boolean;
+  /** Fired ONCE when the countdown reaches zero. */
+  onExpire: () => void;
 }) {
+  const reduceMotion = useReducedMotion();
   const nowSeconds = useSyncExternalStore(
     subscribe,
     getClientSnapshot,
@@ -79,18 +84,42 @@ export function HoldBanner({
   const totalSeconds = Math.floor((remainingMs ?? 0) / 1000);
   const mm = String(Math.floor(totalSeconds / 60)).padStart(2, "0");
   const ss = String(totalSeconds % 60).padStart(2, "0");
-  /* Under a minute the bar turns urgent. Colour is not the only signal - the
-     digits themselves are the information, and they are always present. */
-  const urgent = remainingMs !== null && remainingMs < 60_000 && !expired;
+  /* Two minutes out the bar turns urgent. Colour is never the only signal:
+     the label changes to "Expiring soon" and the digits themselves are the
+     information, always present at full contrast. */
+  const urgent = remainingMs !== null && remainingMs < 120_000 && !expired;
+
+  /**
+   * The zero trigger, fired exactly once.
+   *
+   * The ref is what makes it once. `expired` stays true for every subsequent
+   * tick, so calling the parent from render - or from an unguarded effect -
+   * would fire a router.refresh() four times a second forever.
+   *
+   * It runs in an effect rather than during render because it reaches outside
+   * this component: React may render speculatively, and a speculative render
+   * must not empty someone's cart.
+   */
+  const firedRef = useRef(false);
+  useEffect(() => {
+    if (expired && !firedRef.current) {
+      firedRef.current = true;
+      onExpire();
+    }
+  }, [expired, onExpire]);
 
   return (
     <div
       data-checkout-bar
       className="fixed inset-x-0 bottom-0 z-[100] border-t bg-black/85 backdrop-blur-xl"
       style={{
+        /* The bar's own edge carries the state, so the signal is visible even
+           to someone not looking directly at the digits. */
         borderTopColor: expired
           ? "rgba(255,255,255,0.12)"
-          : "rgba(74,222,128,0.35)",
+          : urgent
+            ? "rgba(241,65,66,0.55)"
+            : "rgba(250,204,21,0.35)",
         paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))",
       }}
     >
@@ -134,22 +163,47 @@ export function HoldBanner({
         <div className="flex shrink-0 items-center justify-between gap-4 sm:justify-end">
           {!expired && (
             <div className="text-left sm:text-right">
-              <p className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
-                Time left
-              </p>
               <p
-                aria-hidden="true"
-                className={`text-xl font-semibold tabular-nums sm:text-2xl ${
-                  urgent ? "text-gold-champagne" : "text-live"
+                className={`text-[10px] uppercase tracking-[0.18em] ${
+                  urgent ? "text-destructive" : "text-muted-foreground"
                 }`}
               >
-                {remainingMs === null ? "--:--" : `${mm}:${ss}`}
+                {urgent ? "Expiring soon" : "Time left"}
               </p>
-              {/* The same fact, once, in a form worth announcing. */}
+
+              <span className="flex items-center gap-2 sm:justify-end">
+                {/* THE PULSE LIVES HERE, NOT ON THE DIGITS.
+                    `animate-pulse` fades its target to 50% opacity. Measured on
+                    this page, that takes the red timer from 5.57:1 down to
+                    2.04:1 - under even the 3:1 large-text floor - for half of
+                    every cycle, at the exact moment the number matters most.
+                    A dot carries no information, so it can blink freely. */}
+                {urgent && (
+                  <span
+                    aria-hidden="true"
+                    className={`size-2 shrink-0 rounded-full bg-destructive ${
+                      reduceMotion ? "" : "animate-pulse"
+                    }`}
+                  />
+                )}
+                <span
+                  aria-hidden="true"
+                  className={`text-xl font-semibold tabular-nums sm:text-2xl ${
+                    urgent ? "text-destructive" : "text-gold-champagne"
+                  }`}
+                >
+                  {remainingMs === null ? "--:--" : `${mm}:${ss}`}
+                </span>
+              </span>
+
+              {/* The same fact, once, in a form worth announcing. A screen
+                  reader hearing a number change every second would be unusable. */}
               <p className="sr-only">
                 {remainingMs === null
                   ? ""
-                  : `About ${Math.ceil(totalSeconds / 60)} minutes left to pay.`}
+                  : totalSeconds < 120
+                    ? `Expiring soon: under ${Math.ceil(totalSeconds / 60)} minute left to pay.`
+                    : `About ${Math.ceil(totalSeconds / 60)} minutes left to pay.`}
               </p>
             </div>
           )}
@@ -171,17 +225,28 @@ export function HoldBanner({
               Choose again
             </Link>
           ) : (
-            /* Deliberately inert. Payment is T25-T27; a button that looked
-               ready and did nothing would be worse than one that says where
-               the flow currently ends. */
-            <button
-              type="button"
-              disabled
-              title="Payment arrives in T25"
-              className="btn-gold inline-flex h-12 cursor-not-allowed items-center gap-2 rounded-xl px-6 text-[15px] font-bold uppercase tracking-wide opacity-45"
-            >
-              Pay now
-            </button>
+            /* Labelled as the flow's next step, but deliberately inert until
+               Stripe lands in T25-T27. A demo whose most urgent button silently
+               does nothing is worse than one that says why - so the reason sits
+               under it in text rather than hiding in a title attribute nobody
+               on a touchscreen can reach. */
+            <span className="flex flex-col items-stretch gap-1">
+              <button
+                type="button"
+                disabled
+                aria-describedby="payment-pending-note"
+                className="btn-gold inline-flex h-12 cursor-not-allowed items-center justify-center gap-2 rounded-xl px-6 text-[15px] font-bold uppercase tracking-wide opacity-45"
+              >
+                Proceed to Payment
+                <ArrowRight className="size-4 shrink-0" aria-hidden="true" />
+              </button>
+              <span
+                id="payment-pending-note"
+                className="text-center text-[10px] text-muted-foreground"
+              >
+                Checkout opens in T25
+              </span>
+            </span>
           )}
         </div>
       </div>

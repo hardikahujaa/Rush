@@ -362,6 +362,82 @@ export async function createHold({
   });
 }
 
+/* ── reading holds back ─────────────────────────────────────────────────── */
+
+/**
+ * The caller's live holds on one event, or null when they have none.
+ *
+ * ── WHY THIS EXISTS: THE COUNTDOWN HAS TO SURVIVE A REFRESH ────────────────
+ * The hold lives for ten minutes in Postgres, but the timer showing it lived
+ * only in React state - so one F5 and the buyer saw nothing, while the database
+ * quietly held their seats for another nine minutes. They would reasonably
+ * assume the hold was gone and start again.
+ *
+ * ── WHY POSTGRES AND NOT localStorage ──────────────────────────────────────
+ * localStorage is the obvious fix and the wrong one. It is a second copy of
+ * state the database already owns, and it can outlive the thing it describes:
+ * close the tab, come back twenty minutes later, and a cached `expiresAt` will
+ * happily count down seats that were released long ago. The user watches a
+ * timer for tickets they do not have.
+ *
+ * Reading it back is authoritative, correct across tabs and devices, and cannot
+ * describe a hold that no longer exists - because the same `holdIsLive` that
+ * decides availability everywhere else decides it here too.
+ *
+ * The shape matches what POST /api/holds returns on success, so the client
+ * seeds its state from either source without knowing which it got.
+ */
+export async function getActiveHoldsForUser(
+  userId: string,
+  eventId: string,
+): Promise<HoldResult | null> {
+  const rows = await db
+    .select({
+      holdId: holds.id,
+      seatId: seats.id,
+      sectionName: sections.name,
+      rowLabel: seats.rowLabel,
+      seatNo: seats.seatNo,
+      priceCents: sections.priceCents,
+      expiresAt: holds.expiresAt,
+    })
+    .from(holds)
+    .innerJoin(seats, eq(seats.id, holds.seatId))
+    .innerJoin(sections, eq(sections.id, seats.sectionId))
+    .where(
+      and(
+        eq(holds.userId, userId),
+        eq(seats.eventId, eventId),
+        sql`${holdIsLive(sql`${holds}`)}`,
+      ),
+    )
+    .orderBy(sections.priceCents, seats.rowLabel, seats.seatNo);
+
+  if (rows.length === 0) return null;
+
+  return {
+    eventId,
+    seats: rows.map((row) => ({
+      holdId: row.holdId,
+      seatId: row.seatId,
+      sectionName: row.sectionName,
+      rowLabel: row.rowLabel,
+      seatNo: row.seatNo,
+      priceCents: row.priceCents,
+    })),
+    /* The EARLIEST expiry across the set. A user can hold seats from two
+       separate requests, and the countdown must show whichever runs out first -
+       showing the later one would promise time they do not have. */
+    expiresAt: rows.reduce(
+      (soonest, row) => (row.expiresAt < soonest ? row.expiresAt : soonest),
+      rows[0].expiresAt,
+    ),
+    totalCents: rows.reduce((sum, row) => sum + row.priceCents, 0),
+    /* Nothing was created by reading. */
+    replayed: true,
+  };
+}
+
 /* ── postgres error mapping ─────────────────────────────────────────────── */
 
 type PgError = { code?: string; constraint_name?: string };
