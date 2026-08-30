@@ -35,6 +35,7 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 
 import { db } from "../src/db";
 import { events, holds, seats, users } from "../src/db/schema";
+import { holdIsLive, seatIsAvailable } from "../src/db/queries/availability";
 import { createHold, HoldError } from "../src/db/queries/holds";
 
 const USER_COUNT = 50;
@@ -130,12 +131,7 @@ async function main() {
   }>(sql`
     select st.id, st.status
     from ${seats} st
-    where st.event_id = ${event.id}
-      and not exists (select 1 from order_items oi where oi.seat_id = st.id)
-      and not exists (
-        select 1 from ${holds} h
-        where h.seat_id = st.id and h.released_at is null and h.expires_at > now()
-      )
+    where st.event_id = ${event.id} and ${seatIsAvailable(sql`st.id`)}
     order by st.id
     limit 1
   `);
@@ -187,9 +183,7 @@ async function main() {
   const liveHolds = await db.execute<{ count: number; owner: string | null }>(sql`
     select count(*)::int as count, min(h.user_id::text) as owner
     from ${holds} h
-    where h.seat_id = ${targetSeatId}
-      and h.released_at is null
-      and h.expires_at > now()
+    where h.seat_id = ${targetSeatId} and ${holdIsLive(sql`h`)}
   `);
   const liveHoldCount = Number(liveHolds[0]?.count ?? 0);
 

@@ -3,7 +3,8 @@ import "server-only";
 import { sql } from "drizzle-orm";
 
 import { db } from "@/db";
-import { holds, orderItems, seats, sections } from "@/db/schema";
+import { seatStatusExpr } from "@/db/queries/availability";
+import { seats, sections } from "@/db/schema";
 import {
   TIER_COLORS,
   type Seat,
@@ -22,8 +23,7 @@ export type SeatMapData = {
  * Tier colours in price order, most expensive first.
  *
  * The same four values the mock venues use, so a database event and a mock one
- * are visually the same product rather than two different ones that happen to
- * share a navbar.
+ * are visually the same product rather than two that happen to share a navbar.
  */
 const PALETTE = [
   TIER_COLORS.gold,
@@ -32,120 +32,117 @@ const PALETTE = [
   TIER_COLORS.violet,
 ];
 
+type TierAccumulator = {
+  id: string;
+  name: string;
+  priceCents: number;
+  rowLabels: Set<string>;
+  maxSeatNo: number;
+  stats: { total: number; available: number; held: number; sold: number };
+};
+
 /**
  * Every seat for a real event, shaped exactly as the seat map already expects.
  *
- * ── WHY THIS IS A SOURCE SWAP AND NOT A REWRITE ────────────────────────────
- * `SeatMap` was deliberately written to receive `seats` as a prop and never to
- * generate them. So making a database event render is a matter of producing the
- * same shapes from Postgres - the component does not learn anything new, and
- * nothing about it changes.
+ * ── ONE QUERY, AND THE COUNTS ARE THE SEATS ────────────────────────────────
+ * This used to be two queries: one aggregating tier counts in SQL, one listing
+ * per-seat statuses. They applied the same availability rule separately, and
+ * separately is how they drifted - the per-seat `case` gave sold precedence over
+ * held while the aggregate counted held without excluding sold, so one seat
+ * could land in both buckets and `available + held + sold` could exceed the
+ * number of seats in the room.
  *
- * ── STATUS COMES FROM THE SOURCE OF TRUTH, NOT seats.status ────────────────
- * `seats.status` is a render cache and it lags: an expired hold leaves 'held'
- * behind until something clears it. Painting the map from the cache would show
- * seats as taken that anyone can actually buy - and worse, it would disagree
- * with the hold API, which decides from `order_items` and live holds. The map
- * and the transaction must answer "is this free?" the same way or the UI is
- * lying about what will happen when you click.
+ * Now the seat rows are fetched once and the tier totals are reduced from them.
+ * The counts cannot disagree with the list because they are derived from it -
+ * the bug is unrepresentable rather than fixed. It is also one round trip
+ * instead of two, and the same shape `mock-data.ts` computes with `seatStats`,
+ * so a database event and a mock event reach their numbers the same way.
+ *
+ * ── STATUS COMES FROM THE SOURCE OF TRUTH ──────────────────────────────────
+ * `seatStatusExpr` reads `order_items` and live unexpired holds, never
+ * `seats.status`. That is what makes expiry lazy: a hold past `expires_at`
+ * stops counting the instant it passes, with no cron job and no write. It is
+ * also the same definition `createHold` decides with, so the map cannot offer a
+ * seat the API would refuse.
+ *
+ * Returns null for an event with no seats.
  */
 export async function getSeatMapForEvent(
   eventId: string,
 ): Promise<SeatMapData | null> {
-  const tierRows = await db.execute<{
-    id: string;
-    name: string;
-    price_cents: number;
-    row_count: number;
-    seats_per_row: number;
-    total: number;
-    available: number;
-    held: number;
-    sold: number;
-  }>(sql`
-    select
-      sec.id,
-      sec.name,
-      sec.price_cents,
-      count(distinct st.row_label)::int                              as row_count,
-      coalesce(max(st.seat_no), 0)::int                              as seats_per_row,
-      count(st.id)::int                                              as total,
-      count(st.id) filter (
-        where not exists (select 1 from ${orderItems} oi where oi.seat_id = st.id)
-          and not exists (
-            select 1 from ${holds} h
-            where h.seat_id = st.id and h.released_at is null and h.expires_at > now()
-          )
-      )::int                                                          as available,
-      count(st.id) filter (
-        where exists (
-          select 1 from ${holds} h
-          where h.seat_id = st.id and h.released_at is null and h.expires_at > now()
-        )
-      )::int                                                          as held,
-      count(st.id) filter (
-        where exists (select 1 from ${orderItems} oi where oi.seat_id = st.id)
-      )::int                                                          as sold
-    from ${sections} sec
-    left join ${seats} st on st.section_id = sec.id
-    where sec.event_id = ${eventId}
-    group by sec.id, sec.name, sec.price_cents
-    order by sec.price_cents desc
-  `);
-
-  if (tierRows.length === 0) return null;
-
-  const seatRows = await db.execute<{
+  const rows = await db.execute<{
     id: string;
     tier_id: string;
     row_label: string;
     seat_no: number;
+    section_name: string;
+    price_cents: number;
     status: SeatStatus;
   }>(sql`
     select
       st.id,
-      st.section_id as tier_id,
+      st.section_id  as tier_id,
       st.row_label,
       st.seat_no,
-      case
-        when exists (select 1 from ${orderItems} oi where oi.seat_id = st.id)
-          then 'sold'
-        when exists (
-          select 1 from ${holds} h
-          where h.seat_id = st.id and h.released_at is null and h.expires_at > now()
-        ) then 'held'
-        else 'available'
-      end as status
+      sec.name       as section_name,
+      sec.price_cents,
+      ${seatStatusExpr(sql`st.id`)} as status
     from ${seats} st
     join ${sections} sec on sec.id = st.section_id
     where st.event_id = ${eventId}
     order by sec.price_cents desc, st.row_label, st.seat_no
   `);
 
+  if (rows.length === 0) return null;
+
+  /* A Map preserves insertion order, and the rows arrive most expensive first,
+     so the tiers come out front-to-back without a second sort. */
+  const byTier = new Map<string, TierAccumulator>();
+  const seatList: Seat[] = [];
+
+  for (const row of rows) {
+    let tier = byTier.get(row.tier_id);
+    if (!tier) {
+      tier = {
+        id: row.tier_id,
+        name: row.section_name,
+        priceCents: Number(row.price_cents),
+        rowLabels: new Set(),
+        maxSeatNo: 0,
+        stats: { total: 0, available: 0, held: 0, sold: 0 },
+      };
+      byTier.set(row.tier_id, tier);
+    }
+
+    tier.rowLabels.add(row.row_label);
+    if (row.seat_no > tier.maxSeatNo) tier.maxSeatNo = row.seat_no;
+    tier.stats.total++;
+    /* Exactly one bucket per seat - the status is a single value, so the three
+       counts always sum to the total. */
+    tier.stats[row.status]++;
+
+    seatList.push({
+      id: row.id,
+      tierId: row.tier_id,
+      row: row.row_label,
+      number: row.seat_no,
+      status: row.status,
+    });
+  }
+
   return {
     /* Seeded events are Front / Middle / Rear facing a stage, which is a
        theatre. When venues gain a real type column this reads it instead. */
     venueType: "theater",
-    tiers: tierRows.map((tier, index) => ({
+    tiers: [...byTier.values()].map((tier, index) => ({
       id: tier.id,
       name: tier.name,
-      priceCents: tier.price_cents,
+      priceCents: tier.priceCents,
       color: PALETTE[index % PALETTE.length],
-      rows: tier.row_count,
-      seatsPerRow: tier.seats_per_row,
-      stats: {
-        total: tier.total,
-        available: tier.available,
-        held: tier.held,
-        sold: tier.sold,
-      },
+      rows: tier.rowLabels.size,
+      seatsPerRow: tier.maxSeatNo,
+      stats: tier.stats,
     })),
-    seats: seatRows.map((seat) => ({
-      id: seat.id,
-      tierId: seat.tier_id,
-      row: seat.row_label,
-      number: seat.seat_no,
-      status: seat.status,
-    })),
+    seats: seatList,
   };
 }

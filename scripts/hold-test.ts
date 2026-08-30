@@ -16,6 +16,7 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 
 import { db } from "../src/db";
 import { events, holds, seats, users } from "../src/db/schema";
+import { seatIsAvailable } from "../src/db/queries/availability";
 import { createHold, HoldError } from "../src/db/queries/holds";
 
 let passed = 0;
@@ -75,12 +76,7 @@ async function main() {
   const free = await db.execute<{ id: string; status: "available" | "held" | "sold" }>(sql`
     select st.id, st.status
     from ${seats} st
-    where st.event_id = ${event.id}
-      and not exists (select 1 from order_items oi where oi.seat_id = st.id)
-      and not exists (
-        select 1 from ${holds} h
-        where h.seat_id = st.id and h.released_at is null and h.expires_at > now()
-      )
+    where st.event_id = ${event.id} and ${seatIsAvailable(sql`st.id`)}
     order by st.id
     limit 14
   `);

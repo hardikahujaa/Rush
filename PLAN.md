@@ -453,13 +453,54 @@ wall time: 1.5s unlocked versus 10.5s locked. The lock buys correctness and clea
 
 ---
 
-### ☐ T22 🟡 — Lazy expiry
+### ☑ T22 🟡 — Lazy expiry
 
 **Prompt:**
 
 > Change every seat availability query so that a seat with status 'held' whose live hold has `expiresAt < now()` is treated as available. Do this in SQL, not in JavaScript. Explain why handling expiry lazily in the query is more reliable than depending on a scheduled cron job.
 
 **Commit:** `feat: lazy hold expiry`
+
+**Done.** `npm run expiry-test` — 18 checks.
+
+**Audit first: the read path was already correct.** T20 established `seats.status` as a
+render cache, and every availability query already read the source of truth. No production
+query decided availability from the cache. So T22 became *make it impossible to get wrong
+twice*, and prove it.
+
+**One definition.** The predicate was spelled out by hand in nine places. It now lives once
+in `src/db/queries/availability.ts` as composable SQL fragments — `seatIsSold`,
+`holdIsLive`, `seatHasLiveHold`, `liveHoldOwner`, `seatIsAvailable`, `seatStatusExpr`.
+Adding a future state is one edit, not nine that must land together.
+
+**A real bug the audit found.** `getSeatMapForEvent` ran two queries: the per-seat `case`
+gave sold precedence over held, but the sibling tier aggregate counted held *without*
+excluding sold. A sold seat carrying an unreleased hold would be counted in both, so
+`available + held + sold` could exceed the seats in the room. Unreachable today; reachable
+the moment T27 creates `order_items`. Fixed by collapsing to one query and reducing the
+tier counts in JS from the seat rows — the counts *are* the seat list, so disagreement is
+now unrepresentable. Also one round trip instead of two (~50 ms per render; network
+dominates the ~1 ms query by 50×).
+
+**Correction to the brief.** It specified `seats.status === 'held' AND expires_at > NOW()`.
+Requiring the cache as a conjunct re-introduces the bug T20 removed: if the cache drifts to
+'available' while a live hold exists, the map offers a seat the API refuses. Only the source
+of truth is consulted.
+
+**Step 2 (write path): already correct from T20, no change.** `hold-test.ts` test 5 proves
+user B takes seats whose hold belongs to user A once A's `expires_at` has passed; deleting
+the release step makes it fail with 23505. A comment in `createHold` records this.
+
+**Step 3 (frontend): verified against the running app**, not asserted. With an expired,
+unreleased hold in place and `seats.status` still reading `'held'`:
+
+    BEFORE     available=231 held=0    Front, row H, seat 4, ₹4,999, available
+    LIVE HOLD  available=230 held=1    Front, row H, seat 4, ₹4,999, on hold, unavailable
+    EXPIRED    available=231 held=0    Front, row H, seat 4, ₹4,999, available
+               DB: seats.status='held', unreleased hold rows=1
+
+**No schema change.** `EXPLAIN` showed the existing `one_live_hold_per_seat` partial index
+already serves the predicate, so nothing was added to the locked schema.
 
 ---
 

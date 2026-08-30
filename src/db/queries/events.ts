@@ -3,6 +3,7 @@ import "server-only";
 import { and, asc, desc, eq, gt, lte, ne, sql } from "drizzle-orm";
 
 import { db } from "@/db";
+import { seatIsAvailable } from "@/db/queries/availability";
 import { events, venues } from "@/db/schema";
 
 export type NextDrop = {
@@ -145,17 +146,7 @@ export async function getEventById(id: string): Promise<EventDetail | null> {
       s.name,
       s.price_cents as "priceCents",
       count(st.id)::int as "seatsTotal",
-      count(st.id) filter (
-        where not exists (
-          select 1 from order_items oi where oi.seat_id = st.id
-        )
-        and not exists (
-          select 1 from holds h
-          where h.seat_id = st.id
-            and h.released_at is null
-            and h.expires_at > now()
-        )
-      )::int as "seatsLeft"
+      count(st.id) filter (where ${seatIsAvailable(sql`st.id`)})::int as "seatsLeft"
     from sections s
     left join seats st on st.section_id = s.id
     where s.event_id = ${id}

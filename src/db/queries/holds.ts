@@ -3,7 +3,12 @@ import "server-only";
 import { and, eq, inArray, isNull, lte, sql } from "drizzle-orm";
 
 import { db } from "@/db";
-import { events, holds, orderItems, seats, sections } from "@/db/schema";
+import {
+  holdIsLive,
+  liveHoldOwner,
+  seatIsSold,
+} from "@/db/queries/availability";
+import { events, holds, seats, sections } from "@/db/schema";
 import { MAX_SEATS_PER_USER } from "@/lib/validation/holds";
 
 /** How long a buyer gets to reach checkout before the seats go back on sale. */
@@ -172,6 +177,19 @@ export async function createHold({
      *
      * Releasing here is safe because we already hold the row locks from step 1,
      * so no concurrent transaction can be mid-decision about these seats.
+     *
+     * ── T22 WRITE-PATH CONFIRMATION ───────────────────────────────────────
+     * This is the overwrite lazy expiry needs, and it was already correct when
+     * T20 shipped: user B requesting a seat whose hold belongs to user A and
+     * whose `expires_at` has passed gets A's hold released here, then B's hold
+     * inserted below. Proven, not assumed - `scripts/hold-test.ts` test 5 does
+     * exactly that, and deleting this UPDATE makes it fail with a 23505 on
+     * `one_live_hold_per_seat`. No change was needed for T22.
+     *
+     * The condition is the inverse of `holdIsLive` in queries/availability.ts.
+     * It is written with Drizzle conditions rather than that fragment only
+     * because this is an UPDATE ... WHERE over the holds table, not a test
+     * applied to a seat.
      */
     await tx
       .update(holds)
@@ -203,16 +221,8 @@ export async function createHold({
     }>(sql`
       select
         st.id,
-        exists (
-          select 1 from ${orderItems} oi where oi.seat_id = st.id
-        ) as sold,
-        (
-          select h.user_id from ${holds} h
-          where h.seat_id = st.id
-            and h.released_at is null
-            and h.expires_at > now()
-          limit 1
-        ) as held_by
+        ${seatIsSold(sql`st.id`)}    as sold,
+        ${liveHoldOwner(sql`st.id`)} as held_by
       from ${seats} st
       where st.id in ${seatIds}
     `);
@@ -256,8 +266,7 @@ export async function createHold({
         join ${seats} st on st.id = h.seat_id
         where h.user_id = ${userId}
           and st.event_id = ${eventId}
-          and h.released_at is null
-          and h.expires_at > now()
+          and ${holdIsLive(sql`h`)}
           and h.seat_id not in ${seatIds}
       `);
 
