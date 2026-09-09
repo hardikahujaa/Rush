@@ -114,3 +114,28 @@ export const holdRateLimiter = redis
       ephemeralCache: new Map(),
     })
   : null;
+
+/**
+ * A SEPARATE budget for giving seats back.
+ *
+ * Sharing the hold bucket has a failure mode worth avoiding: someone who just
+ * spent five attempts trying to grab seats would then be throttled out of
+ * RELEASING them - locked away from the one action that helps everybody else in
+ * the queue. Punishing a user for wanting less inventory is exactly backwards.
+ *
+ * More generous too, at ten per ten seconds. A release only ever affects the
+ * caller's own holds, so the blast radius of abusing it is their own seats;
+ * the limit is here to bound database writes, not to police intent.
+ */
+export const RELEASE_RATE_LIMIT = 10;
+
+export const releaseRateLimiter = redis
+  ? new Ratelimit({
+      redis,
+      limiter: Ratelimit.slidingWindow(RELEASE_RATE_LIMIT, HOLD_RATE_WINDOW),
+      prefix: "rush:ratelimit:release",
+      analytics: false,
+      timeout: 1000,
+      ephemeralCache: new Map(),
+    })
+  : null;

@@ -649,13 +649,54 @@ hold and print what the page would read back.
 
 ---
 
-### ☐ T25 🟢 — Release endpoint + cleanup cron
+### ☑ T25 🟢 — Release endpoint + cleanup cron
 
 **Prompt:**
 
 > Create `POST /api/holds/release` that sets `releasedAt` and returns seats to 'available', verifying the hold belongs to the requesting user. Also create `GET /api/cron/cleanup` that permanently releases expired holds, protected by a `CRON_SECRET` bearer token. Add `vercel.json` with a daily cron at 03:00 UTC hitting that route. Note that Vercel's Hobby plan limits cron frequency, which is fine because our expiry is already lazy — this is just housekeeping.
 
 **Commit:** `feat: hold release and cleanup cron`
+
+**Done.** `npm run release-test` — 18 checks.
+
+**Zero-sabotage is enforced in SQL, not JavaScript.** `user_id = $me` sits inside the
+UPDATE's WHERE clause, so a row belonging to someone else simply does not match. There is
+no ownership branch in the route handler to forget, no read-then-write gap, and no way for
+a later edit to bypass it. The adversarial test is the one that matters: Bob names Alice's
+three seats, releases **nothing**, and her holds are untouched.
+
+**A real auth hole in the brief, closed.** The specified check was
+`` `Bearer ${process.env.CRON_SECRET}` ``. When that variable is unset the template
+collapses to the literal string `"Bearer undefined"` — and anyone sending exactly that
+header authenticates. The route now returns 401 unconditionally when the secret is absent
+and compares with `timingSafeEqual`. Proven by deleting `CRON_SECRET` and re-importing the
+route: no header, `Bearer undefined` and `Bearer ` are all rejected.
+
+**Release also repairs `seats.status`.** `createHold` writes `'held'`, so touching only the
+`holds` table would leave the cache permanently wrong. Guarded by `seatIsSold` so a sold
+seat can never be flipped back.
+
+**Idempotent:** releasing already-released seats returns `200 { released: 0 }`, not 404 — a
+retry after a dropped connection must not report failure for something that succeeded.
+
+**Separate rate-limit bucket** (10 per 10 s, `rush:ratelimit:release`). Sharing the hold
+budget would lock someone who just burned five attempts *out of giving seats back* — the one
+action that returns inventory to everyone else. Verified: after `/api/holds` returns
+`429 429`, `/api/holds/release` still answers `401` on the same identifier.
+
+**The cron stays cosmetic, and the test asserts it.** Before cleanup runs, expired seats are
+*already* available — that is T22. If this job ever became load-bearing, that guarantee
+would have quietly become a lie.
+
+**UI:** a secondary "Release seats" button beside the payment CTA, with a two-step inline
+confirm ("Tap again to release", self-disarming after 4 s). No modal over a running
+countdown, and a stray click next to Proceed to Payment cannot cost someone their seats.
+
+**No amber flash.** After a release the `seats` prop still says `'held'` until
+`router.refresh()` lands, so the user's own seats would have painted amber and pulsing —
+"on hold, unavailable" — as though a stranger took them. A short-lived `justReleased` set
+overrides them to available, applied **only after a 200**, and cleared the moment fresh
+props arrive.
 
 ---
 

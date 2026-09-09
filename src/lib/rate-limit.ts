@@ -5,6 +5,8 @@ import {
   HOLD_RATE_WINDOW_MS,
   holdRateLimiter,
   isRedisConfigured,
+  RELEASE_RATE_LIMIT,
+  releaseRateLimiter,
 } from "@/lib/redis";
 
 export type RateLimitVerdict = {
@@ -56,12 +58,15 @@ function sweep(now: number) {
   }
 }
 
-function memoryLimit(identifier: string): Omit<RateLimitVerdict, "backend"> {
+function memoryLimit(
+  identifier: string,
+  limit: number,
+): Omit<RateLimitVerdict, "backend"> {
   const now = Date.now();
   const cutoff = now - HOLD_RATE_WINDOW_MS;
 
   const hits = (buckets.get(identifier) ?? []).filter((t) => t > cutoff);
-  const success = hits.length < HOLD_RATE_LIMIT;
+  const success = hits.length < limit;
   if (success) hits.push(now);
   buckets.set(identifier, hits);
 
@@ -69,8 +74,8 @@ function memoryLimit(identifier: string): Omit<RateLimitVerdict, "backend"> {
 
   return {
     success,
-    limit: HOLD_RATE_LIMIT,
-    remaining: Math.max(0, HOLD_RATE_LIMIT - hits.length),
+    limit,
+    remaining: Math.max(0, limit - hits.length),
     /* When the OLDEST request in the window ages out - which is the moment a
        slot actually frees, and therefore the only honest Retry-After. */
     reset: hits.length > 0 ? hits[0] + HOLD_RATE_WINDOW_MS : now + HOLD_RATE_WINDOW_MS,
@@ -80,6 +85,8 @@ function memoryLimit(identifier: string): Omit<RateLimitVerdict, "backend"> {
 let warnedAboutMemoryBackend = false;
 
 /* ── the entry point ────────────────────────────────────────────────────── */
+
+type Limiter = typeof holdRateLimiter;
 
 /**
  * Decide whether this caller may proceed.
@@ -95,11 +102,22 @@ let warnedAboutMemoryBackend = false;
  * becomes an outage in ticket sales - trading a real, total failure for a
  * hypothetical, partial one. A rate limiter should never be able to take the
  * thing it protects offline.
+ *
+ * `bucket` namespaces the IN-MEMORY fallback. Redis already separates the two
+ * limiters by key prefix, but the fallback is one Map - without a namespace,
+ * holding and releasing would share a counter in development and the whole
+ * point of giving release its own budget would quietly disappear on the one
+ * setup where it is easiest to test.
  */
-export async function limitHolds(identifier: string): Promise<RateLimitVerdict> {
-  if (holdRateLimiter) {
+async function limit(
+  limiter: Limiter,
+  bucket: string,
+  identifier: string,
+  fallbackLimit: number,
+): Promise<RateLimitVerdict> {
+  if (limiter) {
     try {
-      const result = await holdRateLimiter.limit(identifier);
+      const result = await limiter.limit(identifier);
       return {
         success: result.success,
         limit: result.limit,
@@ -115,8 +133,8 @@ export async function limitHolds(identifier: string): Promise<RateLimitVerdict> 
       );
       return {
         success: true,
-        limit: HOLD_RATE_LIMIT,
-        remaining: HOLD_RATE_LIMIT,
+        limit: fallbackLimit,
+        remaining: fallbackLimit,
         reset: Date.now(),
         backend: "failed-open",
       };
@@ -133,7 +151,23 @@ export async function limitHolds(identifier: string): Promise<RateLimitVerdict> 
     );
   }
 
-  return { ...memoryLimit(identifier), backend: "memory" };
+  return { ...memoryLimit(`${bucket}:${identifier}`, fallbackLimit), backend: "memory" };
+}
+
+/** Claiming seats: 5 per 10s. */
+export function limitHolds(identifier: string): Promise<RateLimitVerdict> {
+  return limit(holdRateLimiter, "holds", identifier, HOLD_RATE_LIMIT);
+}
+
+/**
+ * Giving seats back: 10 per 10s, on its own budget.
+ *
+ * Deliberately not the hold budget. Someone who just spent five attempts trying
+ * to grab seats must not then be throttled out of releasing them - that would
+ * lock them away from the one action that returns inventory to everyone else.
+ */
+export function limitReleases(identifier: string): Promise<RateLimitVerdict> {
+  return limit(releaseRateLimiter, "release", identifier, RELEASE_RATE_LIMIT);
 }
 
 /** Reported in the startup warning and by the test script. */

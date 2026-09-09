@@ -438,6 +438,118 @@ export async function getActiveHoldsForUser(
   };
 }
 
+/* ── releasing ──────────────────────────────────────────────────────────── */
+
+/**
+ * Repair `seats.status` for seats that no longer carry a live hold.
+ *
+ * `createHold` writes `status = 'held'`, so anything that ends a hold has to
+ * clear it or the cache stays wrong forever. Availability does not depend on
+ * this - T22 made that a read-time decision over `order_items` and live holds -
+ * but a cache nobody maintains is just a misleading column, and the next person
+ * to read the table will believe it.
+ *
+ * Guarded by `seatIsSold` so a seat with an order line can never be flipped
+ * back to available by a stray hold row. Sold is permanent; held is not.
+ */
+async function repairSeatStatus(
+  tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
+  seatIds: string[],
+): Promise<number> {
+  if (seatIds.length === 0) return 0;
+
+  const repaired = await tx.execute<{ id: string }>(sql`
+    update ${seats} st
+    set status = 'available'
+    where st.id in ${seatIds}
+      and st.status <> 'available'
+      and not ${seatIsSold(sql`st.id`)}
+    returning st.id
+  `);
+  return repaired.length;
+}
+
+/**
+ * Hand seats back voluntarily.
+ *
+ * ── OWNERSHIP IS ENFORCED IN THE WHERE CLAUSE ──────────────────────────────
+ * `user_id = ${userId}` sits in the UPDATE itself rather than in a fetch-then-
+ * check above it. A row belonging to someone else simply does not match, so
+ * there is no branch to get wrong and no gap between reading and writing for a
+ * concurrent request to slip through. The strongest version of an authorisation
+ * rule is one the database applies, not one the application remembers to.
+ *
+ * ── IDEMPOTENT ─────────────────────────────────────────────────────────────
+ * Releasing seats that were already released, or already expired, updates
+ * nothing and returns zero. The caller's intent - "I do not want these" - is
+ * satisfied either way, so a retry after a dropped connection must not look
+ * like a failure.
+ */
+export async function releaseHolds({
+  userId,
+  seatIds,
+}: {
+  userId: string;
+  seatIds: string[];
+}): Promise<{ released: string[]; statusRepaired: number }> {
+  if (seatIds.length === 0) return { released: [], statusRepaired: 0 };
+
+  return db.transaction(async (tx) => {
+    const rows = await tx
+      .update(holds)
+      .set({ releasedAt: sql`now()` })
+      .where(
+        and(
+          inArray(holds.seatId, seatIds),
+          eq(holds.userId, userId),
+          isNull(holds.releasedAt),
+        ),
+      )
+      .returning({ seatId: holds.seatId });
+
+    const released = rows.map((r) => r.seatId);
+    const statusRepaired = await repairSeatStatus(tx, released);
+
+    return { released, statusRepaired };
+  });
+}
+
+/**
+ * The cron job's whole body: mark expired holds as released.
+ *
+ * ── THIS IS HOUSEKEEPING AND MUST STAY THAT WAY ────────────────────────────
+ * Nothing depends on it running. A hold past `expires_at` already frees its
+ * seat, in the query, the instant it passes - that is T22, and it is what makes
+ * the ten-minute promise honest even if this job never runs again.
+ *
+ * What it actually buys is tidiness. A seat whose hold expired and which nobody
+ * re-requested keeps a row with `released_at IS NULL` and a stale
+ * `seats.status = 'held'` indefinitely. Neither is wrong in any way a user can
+ * see; both are wrong in a way that would mislead the next person reading the
+ * database.
+ *
+ * If this function ever grows a line that changes what "available" means, T22's
+ * guarantee has quietly become a lie and the seat map starts depending on a
+ * daily job to be correct.
+ */
+export async function releaseExpiredHolds(): Promise<{
+  released: number;
+  statusRepaired: number;
+}> {
+  return db.transaction(async (tx) => {
+    const rows = await tx
+      .update(holds)
+      .set({ releasedAt: sql`now()` })
+      .where(and(isNull(holds.releasedAt), lte(holds.expiresAt, sql`now()`)))
+      .returning({ seatId: holds.seatId });
+
+    const seatIds = [...new Set(rows.map((r) => r.seatId))];
+    const statusRepaired = await repairSeatStatus(tx, seatIds);
+
+    return { released: rows.length, statusRepaired };
+  });
+}
+
 /* ── postgres error mapping ─────────────────────────────────────────────── */
 
 type PgError = { code?: string; constraint_name?: string };

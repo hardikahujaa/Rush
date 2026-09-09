@@ -104,15 +104,68 @@ export function SeatMap({
   /* Unix ms until which the Hold button stays disabled after a 429. Zero means
      no cooldown is running. */
   const [cooldownUntil, setCooldownUntil] = useState(0);
+  const [releasing, setReleasing] = useState(false);
+  /**
+   * Seats the server has confirmed released, whose `seats` prop has not caught
+   * up yet.
+   *
+   * Without this there is a visible lie. After a release the prop still says
+   * `status: 'held'` until router.refresh() lands, and with `mine` cleared
+   * SeatButton would paint those seats amber and pulsing - "on hold,
+   * unavailable" - so for a few hundred milliseconds the user's own seats look
+   * like a stranger just took them.
+   *
+   * This is NOT optimism about the outcome: it is only ever populated after a
+   * 200, so the seat genuinely is free and only our props are stale. It clears
+   * itself when the refreshed prop arrives.
+   */
+  const [justReleased, setJustReleased] = useState<Set<string>>(new Set());
+
+  /**
+   * Drop the override the moment real data arrives.
+   *
+   * Without this the override outlives its purpose: hold one of those seats
+   * again later and the prop would correctly say 'held' while we kept forcing
+   * 'available' - a stale lie replacing the brief one it was added to prevent.
+   *
+   * Setting state during render is React's documented way to adjust state when
+   * a prop changes; React discards the in-progress render and immediately redoes
+   * it, without committing the first pass or touching the DOM. Doing it in an
+   * effect instead would paint one frame with the wrong seats first, and is what
+   * React 19's set-state-in-effect rule exists to discourage.
+   */
+  const [seatsSeen, setSeatsSeen] = useState(seats);
+  if (seats !== seatsSeen) {
+    setSeatsSeen(seats);
+    if (justReleased.size > 0) setJustReleased(new Set());
+  }
   const reduceMotion = useReducedMotion();
 
   const tiersById = useMemo(
     () => new Map(tiers.map((tier) => [tier.id, tier])),
     [tiers],
   );
+  /**
+   * The seat list as the user should see it right now.
+   *
+   * Anything in `justReleased` is forced to `available`, overriding a prop that
+   * has not been refetched yet. Derived during render rather than copied into
+   * state, so when the server does send fresh data the override simply stops
+   * mattering - there is no second copy to remember to clear.
+   */
+  const visibleSeats = useMemo(
+    () =>
+      justReleased.size === 0
+        ? seats
+        : seats.map((seat) =>
+            justReleased.has(seat.id) ? { ...seat, status: "available" as const } : seat,
+          ),
+    [seats, justReleased],
+  );
+
   const seatsById = useMemo(
-    () => new Map(seats.map((seat) => [seat.id, seat])),
-    [seats],
+    () => new Map(visibleSeats.map((seat) => [seat.id, seat])),
+    [visibleSeats],
   );
 
   /**
@@ -158,11 +211,60 @@ export function SeatMap({
 
   /** One admission from a standing tier: the next unclaimed spot in the zone. */
   function addStanding(tierId: string) {
-    const next = seats.find(
+    const next = visibleSeats.find(
       (s) => s.tierId === tierId && s.status === "available" && !selectedSet.has(s.id),
     );
     if (next) toggle(next);
   }
+
+  /**
+   * Hand the held seats back on purpose.
+   *
+   * Pessimistic: nothing in the UI changes until the server has answered 200.
+   * Clearing first and rolling back on failure would flash "released" at
+   * someone whose seats are still held, which is the one thing a seat map must
+   * never do.
+   */
+  const handleRelease = useCallback(async (): Promise<boolean> => {
+    if (!held || releasing) return false;
+
+    setReleasing(true);
+    setError(null);
+
+    try {
+      const response = await fetch("/api/holds/release", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ seatIds: held.seats.map((s) => s.seatId) }),
+      });
+
+      if (response.status === 401) {
+        router.push(`/login?next=/events/${eventId}/seats`);
+        return false;
+      }
+
+      const data = await response.json().catch(() => null);
+
+      if (!response.ok) {
+        setError(data?.error?.message ?? "Could not release those seats.");
+        return false;
+      }
+
+      const releasedIds: string[] = data?.seatIds ?? [];
+      /* Paint them free immediately - the server already said so. */
+      setJustReleased(new Set(releasedIds));
+      setHeld(null);
+      setMine(new Set());
+      setSelectedIds([]);
+      router.refresh();
+      return true;
+    } catch {
+      setError("Network problem — your seats are still held. Try again.");
+      return false;
+    } finally {
+      setReleasing(false);
+    }
+  }, [held, releasing, router, eventId]);
 
   /**
    * The hold ran out.
@@ -350,7 +452,7 @@ export function SeatMap({
                 }
 
                 /* ── SEATED: rows of individual seats ──────────────────── */
-                const rows = groupRows(tier.id, seats);
+                const rows = groupRows(tier.id, visibleSeats);
 
                 return (
                   <div key={tier.id} className="flex flex-col items-center gap-1.5">
@@ -421,6 +523,8 @@ export function SeatMap({
           eventId={eventId}
           replayed={held.replayed}
           onExpire={handleExpiry}
+          onRelease={handleRelease}
+          releasing={releasing}
         />
       ) : (
         <CheckoutBar

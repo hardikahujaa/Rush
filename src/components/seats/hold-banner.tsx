@@ -1,9 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useReducedMotion } from "framer-motion";
-import { ArrowRight, CheckCircle2, Clock } from "lucide-react";
+import { ArrowRight, CheckCircle2, Clock, Loader2 } from "lucide-react";
 
 import { formatPaise } from "@/lib/mock-events";
 
@@ -60,6 +60,8 @@ export function HoldBanner({
   eventId,
   replayed,
   onExpire,
+  onRelease,
+  releasing,
 }: {
   seats: HeldSeatView[];
   expiresAtIso: string;
@@ -69,6 +71,10 @@ export function HoldBanner({
   replayed: boolean;
   /** Fired ONCE when the countdown reaches zero. */
   onExpire: () => void;
+  /** Hands these seats back. Resolves false if the server refused. */
+  onRelease: () => Promise<boolean>;
+  /** A release request is in flight. */
+  releasing: boolean;
 }) {
   const reduceMotion = useReducedMotion();
   const nowSeconds = useSyncExternalStore(
@@ -100,6 +106,25 @@ export function HoldBanner({
    * this component: React may render speculatively, and a speculative render
    * must not empty someone's cart.
    */
+  /**
+   * Two-step confirm, because this is irreversible at the worst moment.
+   *
+   * "Release seats" sits inches from "Proceed to Payment" while a clock is
+   * running. A stray click there does not cost a mis-navigation - it hands four
+   * seats back into a live drop, where they can be gone before the user
+   * understands what happened.
+   *
+   * The first click arms it for four seconds and it disarms itself. No modal:
+   * a dialog stealing focus over a running countdown is its own kind of hostile.
+   */
+  const [armed, setArmed] = useState(false);
+
+  useEffect(() => {
+    if (!armed) return;
+    const id = setTimeout(() => setArmed(false), 4000);
+    return () => clearTimeout(id);
+  }, [armed]);
+
   const firedRef = useRef(false);
   useEffect(() => {
     if (expired && !firedRef.current) {
@@ -230,21 +255,60 @@ export function HoldBanner({
                does nothing is worse than one that says why - so the reason sits
                under it in text rather than hiding in a title attribute nobody
                on a touchscreen can reach. */
-            <span className="flex flex-col items-stretch gap-1">
+            <span className="flex items-start gap-2">
+              {/* Secondary by weight, not by size: outline instead of filled,
+                  so the eye lands on payment first - but still a full-height
+                  target, because a cramped escape hatch is its own problem. */}
               <button
                 type="button"
-                disabled
-                aria-describedby="payment-pending-note"
-                className="btn-gold inline-flex h-12 cursor-not-allowed items-center justify-center gap-2 rounded-xl px-6 text-[15px] font-bold uppercase tracking-wide opacity-45"
+                onClick={async () => {
+                  if (!armed) {
+                    setArmed(true);
+                    return;
+                  }
+                  setArmed(false);
+                  await onRelease();
+                }}
+                disabled={releasing}
+                aria-label={
+                  armed
+                    ? "Confirm releasing your seats"
+                    : "Release your seats and return them to sale"
+                }
+                className={`inline-flex h-12 shrink-0 items-center justify-center gap-2 rounded-xl px-4 text-[13px] font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-45 ${
+                  armed
+                    ? "border border-destructive/60 bg-destructive/12 text-destructive"
+                    : "btn-gold-outline"
+                }`}
               >
-                Proceed to Payment
-                <ArrowRight className="size-4 shrink-0" aria-hidden="true" />
+                {releasing ? (
+                  <>
+                    <Loader2 className="size-4 shrink-0 animate-spin" aria-hidden="true" />
+                    Releasing
+                  </>
+                ) : armed ? (
+                  "Tap again to release"
+                ) : (
+                  "Release seats"
+                )}
               </button>
-              <span
-                id="payment-pending-note"
-                className="text-center text-[10px] text-muted-foreground"
-              >
-                Checkout opens in T25
+
+              <span className="flex flex-col items-stretch gap-1">
+                <button
+                  type="button"
+                  disabled
+                  aria-describedby="payment-pending-note"
+                  className="btn-gold inline-flex h-12 cursor-not-allowed items-center justify-center gap-2 rounded-xl px-6 text-[15px] font-bold uppercase tracking-wide opacity-45"
+                >
+                  Proceed to Payment
+                  <ArrowRight className="size-4 shrink-0" aria-hidden="true" />
+                </button>
+                <span
+                  id="payment-pending-note"
+                  className="text-center text-[10px] text-muted-foreground"
+                >
+                  Checkout opens in T25
+                </span>
               </span>
             </span>
           )}
