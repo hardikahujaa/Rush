@@ -62,6 +62,10 @@ export function HoldBanner({
   onExpire,
   onRelease,
   releasing,
+  onCheckout,
+  checkoutPending,
+  checkoutError,
+  checkoutCoolingDown,
 }: {
   seats: HeldSeatView[];
   expiresAtIso: string;
@@ -75,6 +79,14 @@ export function HoldBanner({
   onRelease: () => Promise<boolean>;
   /** A release request is in flight. */
   releasing: boolean;
+  /** Claim these seats on Stripe and navigate to the hosted checkout page. */
+  onCheckout: () => void;
+  /** A checkout request is in flight. The button must not fire twice. */
+  checkoutPending: boolean;
+  /** Server-supplied failure text, already human-readable. */
+  checkoutError: string | null;
+  /** A 429 cooldown is running - the button stays disabled until it clears. */
+  checkoutCoolingDown: boolean;
 }) {
   const reduceMotion = useReducedMotion();
   const nowSeconds = useSyncExternalStore(
@@ -183,6 +195,20 @@ export function HoldBanner({
               </li>
             ))}
           </ul>
+
+          {/* Same convention as CheckoutBar's error surface: a live region that
+              exists before it has content, and gold-champagne rather than
+              text-destructive - that colour is reserved for the countdown
+              running out, not for "checkout failed", which is a different
+              signal. */}
+          <p role="status" aria-live="polite" className="sr-only">
+            {checkoutError ?? ""}
+          </p>
+          {checkoutError && (
+            <p className="mt-1.5 text-[11px] font-medium text-gold-champagne">
+              {checkoutError}
+            </p>
+          )}
         </div>
 
         <div className="flex shrink-0 items-center justify-between gap-4 sm:justify-end">
@@ -250,11 +276,6 @@ export function HoldBanner({
               Choose again
             </Link>
           ) : (
-            /* Labelled as the flow's next step, but deliberately inert until
-               Stripe lands in T25-T27. A demo whose most urgent button silently
-               does nothing is worse than one that says why - so the reason sits
-               under it in text rather than hiding in a title attribute nobody
-               on a touchscreen can reach. */
             <span className="flex items-start gap-2">
               {/* Secondary by weight, not by size: outline instead of filled,
                   so the eye lands on payment first - but still a full-height
@@ -269,7 +290,7 @@ export function HoldBanner({
                   setArmed(false);
                   await onRelease();
                 }}
-                disabled={releasing}
+                disabled={releasing || checkoutPending}
                 aria-label={
                   armed
                     ? "Confirm releasing your seats"
@@ -293,23 +314,30 @@ export function HoldBanner({
                 )}
               </button>
 
-              <span className="flex flex-col items-stretch gap-1">
-                <button
-                  type="button"
-                  disabled
-                  aria-describedby="payment-pending-note"
-                  className="btn-gold inline-flex h-12 cursor-not-allowed items-center justify-center gap-2 rounded-xl px-6 text-[15px] font-bold uppercase tracking-wide opacity-45"
-                >
-                  Proceed to Payment
-                  <ArrowRight className="size-4 shrink-0" aria-hidden="true" />
-                </button>
-                <span
-                  id="payment-pending-note"
-                  className="text-center text-[10px] text-muted-foreground"
-                >
-                  Checkout opens in T25
-                </span>
-              </span>
+              <button
+                type="button"
+                onClick={onCheckout}
+                /* Disabled while a request is in flight so a double-click
+                   cannot open two Stripe sessions for the same hold, while a
+                   429 cooldown is running, and while a release is in flight -
+                   releasing and paying for the same seats at once makes no
+                   sense to allow. */
+                disabled={checkoutPending || checkoutCoolingDown || releasing}
+                aria-busy={checkoutPending}
+                className="btn-gold inline-flex h-12 items-center justify-center gap-2 rounded-xl px-6 text-[15px] font-bold uppercase tracking-wide outline-none transition-[filter,opacity] duration-300 hover:brightness-110 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-black disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:brightness-100"
+              >
+                {checkoutPending ? (
+                  <>
+                    <Loader2 className="size-4 shrink-0 animate-spin" aria-hidden="true" />
+                    Opening checkout
+                  </>
+                ) : (
+                  <>
+                    Proceed to Payment
+                    <ArrowRight className="size-4 shrink-0" aria-hidden="true" />
+                  </>
+                )}
+              </button>
             </span>
           )}
         </div>

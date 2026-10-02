@@ -105,6 +105,12 @@ export function SeatMap({
      no cooldown is running. */
   const [cooldownUntil, setCooldownUntil] = useState(0);
   const [releasing, setReleasing] = useState(false);
+  const [checkoutPending, setCheckoutPending] = useState(false);
+  const [checkoutError, setCheckoutError] = useState<string | null>(null);
+  /* Unix ms until which the Pay button stays disabled after a 429. Mirrors
+     `cooldownUntil` above but on its own clock, since a checkout flood and a
+     hold flood are rate-limited on separate Redis budgets. */
+  const [checkoutCooldownUntil, setCheckoutCooldownUntil] = useState(0);
   /**
    * Seats the server has confirmed released, whose `seats` prop has not caught
    * up yet.
@@ -256,6 +262,7 @@ export function SeatMap({
       setHeld(null);
       setMine(new Set());
       setSelectedIds([]);
+      setCheckoutError(null);
       router.refresh();
       return true;
     } catch {
@@ -265,6 +272,69 @@ export function SeatMap({
       setReleasing(false);
     }
   }, [held, releasing, router, eventId]);
+
+  /**
+   * Turn the live hold into a Stripe Checkout Session and leave.
+   *
+   * Pessimistic in the same sense as `handleRelease`: nothing navigates until
+   * the server has actually answered with a real session url. The navigation
+   * itself is a full page load to `checkout.stripe.com`, not a Next route, so
+   * it uses `window.location.href` rather than `router.push` - the latter is
+   * for same-origin app routes and would not take the browser anywhere near
+   * Stripe's hosted page.
+   */
+  const handleCheckout = useCallback(async () => {
+    if (!held || checkoutPending || Date.now() < checkoutCooldownUntil) return;
+
+    setCheckoutPending(true);
+    setCheckoutError(null);
+
+    try {
+      const response = await fetch("/api/checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ seatIds: held.seats.map((s) => s.seatId) }),
+      });
+
+      if (response.status === 401) {
+        router.push(`/login?next=/events/${eventId}/seats`);
+        return;
+      }
+
+      const data = await response.json().catch(() => null);
+
+      /* Same reasoning as submitHold's 429 branch: must not refresh (nothing
+         about the seats changed, and firing again would feed the flood the
+         server just asked to stop), and the cooldown is what actually makes
+         the button unclickable rather than just complaining each time. */
+      if (response.status === 429) {
+        const retryAfter = Number(response.headers.get("Retry-After")) || 5;
+        setCheckoutError(
+          data?.error?.message ?? "Too many checkout attempts. Please wait a moment.",
+        );
+        setCheckoutCooldownUntil(Date.now() + retryAfter * 1000);
+        window.setTimeout(() => setCheckoutCooldownUntil(0), retryAfter * 1000);
+        return;
+      }
+
+      if (!response.ok) {
+        setCheckoutError(
+          data?.error?.message ?? "Could not start checkout. Please try again.",
+        );
+        /* A HOLDS_INVALID failure means the server just found our hold is no
+           longer what we believed it was - re-pull the real seat map rather
+           than letting the UI keep disagreeing with the database. */
+        router.refresh();
+        return;
+      }
+
+      window.location.href = data.url;
+    } catch {
+      setCheckoutError("Network problem — check your connection and try again.");
+    } finally {
+      setCheckoutPending(false);
+    }
+  }, [held, checkoutPending, checkoutCooldownUntil, router, eventId]);
 
   /**
    * The hold ran out.
@@ -359,6 +429,7 @@ export function SeatMap({
       setMine(new Set((data as HoldSuccess).seats.map((s) => s.seatId)));
       setSelectedIds([]);
       setLimitHit(0);
+      setCheckoutError(null);
       router.refresh();
     } catch {
       // A network failure is genuinely unknown: the hold may or may not exist.
@@ -525,6 +596,10 @@ export function SeatMap({
           onExpire={handleExpiry}
           onRelease={handleRelease}
           releasing={releasing}
+          onCheckout={handleCheckout}
+          checkoutPending={checkoutPending}
+          checkoutError={checkoutError}
+          checkoutCoolingDown={checkoutCooldownUntil > 0}
         />
       ) : (
         <CheckoutBar

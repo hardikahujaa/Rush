@@ -702,7 +702,7 @@ props arrive.
 
 ## PHASE 6 — Payments
 
-### ☐ T26 🟡 — Stripe setup
+### ☑ T26 🟡 — Stripe setup
 
 Get your test-mode keys from the Stripe dashboard. Add to `.env.local`:
 ```
@@ -716,9 +716,17 @@ NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY="pk_test_..."
 
 **Commit:** `chore: stripe client`
 
+**Done.** `src/lib/stripe.ts` wraps the client behind the same loud `required()`
+convention `src/lib/supabase/env.ts` already uses - throw with a clear message
+at import time, never a silent `undefined`. `apiVersion` is pinned to the exact
+string the installed SDK (23.0.0) defaults to, confirmed by reading
+`node_modules/stripe/cjs/apiVersion.js` directly rather than from memory, so a
+future `npm update` that bumps the SDK can't silently change the wire format
+this code was read and written against.
+
 ---
 
-### ☐ T27 🔴 — Checkout session
+### ☑ T27 🔴 — Checkout session
 
 **Prompt (Plan Mode):**
 
@@ -726,6 +734,80 @@ NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY="pk_test_..."
 
 **Verify:** clicking Pay takes you to a Stripe checkout page.
 **Commit:** `feat: stripe checkout session`
+
+**Done.** `src/db/queries/orders.ts` holds the transaction (`createPendingOrder`);
+`src/app/api/checkout/route.ts` is the endpoint; `src/lib/checkout-session.ts`
+builds the real Stripe call so the route and the test import the identical
+function. `npm run checkout-test` — 24 checks against the real Postgres
+database and the real Stripe test API (not re-implementations), plus one HTTP
+pass at the live rate limit.
+
+Two deviations from the prompt, each one a defect the literal spec would ship -
+the same pattern T20, T22, T23 and T25 each found in their own briefs:
+
+1. **`orderItems` is never written here - only by the webhook, in T28.**
+   `order_items` carries `one_sold_seat`, an UNCONDITIONAL unique index on
+   `seat_id` - unlike `holds`, which is only unique while `released_at IS
+   NULL`. Insert a row the moment a 'pending' order exists, and if that Stripe
+   session is ever abandoned, expires, or fails, the seat can never be
+   inserted into `order_items` again, by anyone, ever - `seatIsSold()` has no
+   idea the parent order never got paid. One abandoned checkout would
+   permanently remove a seat from inventory. `createPendingOrder` writes only
+   the `orders` row; the webhook writes `order_items` at the one instant that
+   actually earns the word "sold" - a confirmed `checkout.session.completed`.
+   (This also settles an ambiguity in T28's own brief below, which never
+   mentions inserting `order_items` either - it has to happen there, by
+   construction, or `one_sold_seat` never does anything.)
+   Proven by test 6/8: a pending order, and a second one against the same
+   still-held seats, both land zero rows in `order_items`.
+
+2. **The caller's holds are extended to match Stripe's own expiry floor.**
+   `Checkout.Session.expires_at` must be 30 minutes to 24 hours from creation -
+   confirmed directly against the installed SDK's type comment
+   (`node_modules/stripe/cjs/resources/Checkout/Sessions.d.ts`), not memory,
+   since training data is exactly what `AGENTS.md` warns not to trust here.
+   The hold lives ten. Left alone, a hold can lazily free (correctly, by
+   T22's own rules) while its buyer is still sitting on an open Stripe page;
+   a second buyer can then legitimately pay for the same seat, and when the
+   first buyer also finishes paying, one of the two webhooks loses to
+   `one_sold_seat` with real money already moved. `createPendingOrder`
+   extends the live holds to the exact instant (`CHECKOUT_WINDOW_MINUTES` =
+   30, +60s buffer) the Stripe session will expire, inside the same
+   row-locked transaction that verifies them - an UPDATE of a row the caller
+   already owns, so `one_live_hold_per_seat` (which only guards a second
+   INSERT) is not in play. Proven by test 6: the hold's `expires_at` in
+   Postgres and the real Stripe session's `expires_at` land on the same
+   second.
+
+Also stricter than asked: Stripe's own `amount_total` on the created session
+is checked against the server-computed total (test 7), not just our local
+variable - proof the price reaches Stripe itself, not only our own response.
+`metadata.seatIds` is stored alongside `metadata.orderId` so the future
+webhook has a durable, signature-verified source for "which seats" that does
+not depend on whether the holds are still live by the time it reads them back.
+
+**A Stripe API change caught by the type-check, not assumed from training
+data:** `payment_method_types` no longer exists on `SessionCreateParams` in
+the pinned API version (`2026-09-30.endive`) - `tsc` refused the first draft.
+Stripe now manages enabled methods per-account from the Dashboard; "card" is
+on by default, which is also what the brief's test card exercises, so the
+field is simply omitted rather than guessed at.
+
+**Known, stated gap, same pattern as T24/T25's forward references:**
+`success_url` points at `/orders/[id]/success`, which doesn't exist until
+T29. A real payment will 404 after completing until then. The hold-banner's
+"Checkout opens in T25" placeholder is gone - the button either works or
+shows why it didn't.
+
+**Not yet verified by me: the fully authenticated browser path (click Pay,
+land on Stripe, pay with 4242 4242 4242 4242, return).** Same limitation T20
+already disclosed - it needs a real login, and the seeded demo buyers have no
+Supabase Auth password, only a `public.users` row. A plain HTTP fetch of the
+seats page confirms it still renders (200, correct title, no error markup) as
+a regression check, and `checkout-test.ts`'s test 7 calls the real
+`buildCheckoutSession` against the real Stripe test API and gets back a real
+`cs_...` session whose `url` genuinely starts with
+`https://checkout.stripe.com/` - but nobody has clicked it in a browser.
 
 ---
 

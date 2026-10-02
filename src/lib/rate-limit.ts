@@ -1,6 +1,8 @@
 import "server-only";
 
 import {
+  CHECKOUT_RATE_LIMIT,
+  checkoutRateLimiter,
   HOLD_RATE_LIMIT,
   HOLD_RATE_WINDOW_MS,
   holdRateLimiter,
@@ -168,6 +170,18 @@ export function limitHolds(identifier: string): Promise<RateLimitVerdict> {
  */
 export function limitReleases(identifier: string): Promise<RateLimitVerdict> {
   return limit(releaseRateLimiter, "release", identifier, RELEASE_RATE_LIMIT);
+}
+
+/**
+ * Turning a hold into a Stripe Checkout Session: 5 per 10s, its own budget.
+ *
+ * Every allowed request makes an outbound call to Stripe's API, which is
+ * slower and more expensive than anything else this limiter family guards -
+ * sharing a bucket with holds or releases would let a checkout flood eat
+ * headroom that is meant for seat selection.
+ */
+export function limitCheckout(identifier: string): Promise<RateLimitVerdict> {
+  return limit(checkoutRateLimiter, "checkout", identifier, CHECKOUT_RATE_LIMIT);
 }
 
 /** Reported in the startup warning and by the test script. */

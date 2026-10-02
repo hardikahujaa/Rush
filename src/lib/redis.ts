@@ -139,3 +139,28 @@ export const releaseRateLimiter = redis
       ephemeralCache: new Map(),
     })
   : null;
+
+/**
+ * A THIRD budget, for turning a hold into a Stripe Checkout Session.
+ *
+ * Not shared with the hold bucket: same reasoning as release having its own -
+ * someone who just spent five attempts grabbing seats must still be able to
+ * pay for the ones they got. Not shared with release either, because the two
+ * actions have opposite blast radii: releasing only ever touches the caller's
+ * own seats, while checkout makes an outbound call to Stripe's API on every
+ * request. Five per ten seconds, matching the hold budget rather than
+ * release's more generous one, because each allowed request costs a real
+ * network round trip to a third party, not just a Postgres write.
+ */
+export const CHECKOUT_RATE_LIMIT = 5;
+
+export const checkoutRateLimiter = redis
+  ? new Ratelimit({
+      redis,
+      limiter: Ratelimit.slidingWindow(CHECKOUT_RATE_LIMIT, HOLD_RATE_WINDOW),
+      prefix: "rush:ratelimit:checkout",
+      analytics: false,
+      timeout: 1000,
+      ephemeralCache: new Map(),
+    })
+  : null;
