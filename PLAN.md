@@ -811,7 +811,7 @@ a regression check, and `checkout-test.ts`'s test 7 calls the real
 
 ---
 
-### ☐ T28 🔴 — The webhook (this is the interview question)
+### ☑ T28 🔴 — The webhook (this is the interview question)
 
 **Prompt (Plan Mode):**
 
@@ -831,6 +831,130 @@ Use test card `4242 4242 4242 4242`, any future expiry, any CVC.
 
 **Verify:** after paying, the order is 'paid', seats are 'sold', tickets exist.
 **Commit:** `feat: idempotent stripe webhook`
+
+**Done.** `src/db/queries/webhooks.ts` holds both transactions;
+`src/app/api/webhooks/stripe/route.ts` is the endpoint. `npm run webhook-test` -
+**50 checks**, every one against the real route over real HTTP with payloads
+signed by the real `STRIPE_WEBHOOK_SECRET` (via the SDK's own
+`generateTestHeaderString`). Nothing mocked.
+
+    8. 20 deliveries of ONE event, fired simultaneously
+       20 concurrent deliveries in 1256 ms
+       outcomes: {"fulfilled":1,"replayed":19}
+       DB VERIFICATION: exactly two tickets for two seats. One webhook_events row.
+
+**A REAL BUG THIS TEST FOUND, IN CODE THAT SHIPPED THREE TASKS AGO.** The first
+run came back `{"fulfilled":1,"http_500":19}` - the data was perfect but every
+replay answered **500**, which tells Stripe to retry a payment it had already
+fulfilled, for three days. Cause: **Drizzle does not throw the driver's error.**
+It throws a `DrizzleQueryError` and hangs the `PostgresError` - the object
+actually carrying `code` and `constraint_name` - on `.cause`. So the idiomatic
+
+    (error as { code?: string }).code === "23505"
+
+typechecks, reads `undefined`, and never matches. Fixed in a new
+`src/db/pg-error.ts` that walks the `cause` chain.
+
+**The same bug was already live in `src/db/queries/holds.ts`** -
+`isLiveHoldViolation` and `isDeadlock` were written the same way, so the 409 and
+503 branches in `/api/holds` were unreachable dead code. **It is visible in
+T21's own recorded output:** the negative control reported
+`Successes: 1  Conflicts: 34  Server Errors: 15`. Those fifteen were
+`one_live_hold_per_seat` firing exactly as designed - but because the code could
+not be read, each one became a generic 500 "Could not hold those seats" instead
+of an honest 409 "Someone just took that seat." The database was always right;
+the error mapping was discarding its answer. Both now route through the shared
+helper. T20/T21/T22/T25/T27 suites all still pass (20/50/18/18/24 checks).
+
+**NEGATIVE CONTROL - four configurations, removing one layer at a time.** This
+is the run that makes the green run mean something, and it found something
+better than expected: **no configuration ever issued duplicate tickets.**
+
+| removed | 20 concurrent outcomes | tickets | verdict |
+|---|---|---|---|
+| nothing | `fulfilled:1, replayed:19` | 2 | clean 200s |
+| the `webhook_events` insert | `fulfilled:1, already_paid:19` | 2 | layer 2 held |
+| + the `already_paid` guard | `fulfilled:1, seat_conflict:19` | 2 | layer 3 held |
+| + the `seatIsSold` guard | `fulfilled:1, http_500:19` | 2 | `one_sold_seat` / `tickets_seat_unique` held |
+
+Four independent layers, each sufficient on its own. What the upper layers buy
+is not the data guarantee - the indexes already provide that - it is the correct
+**HTTP contract** and clean order state: Stripe stops retrying, and the order is
+not left marked `failed` by nineteen handlers racing behind the one that
+succeeded.
+
+Deviations from the brief, each one a hole the literal spec would ship:
+
+1. **The brief's step 2 is a race, and step 3 fixes it by accident.** "Check
+   `webhookEvents` for the `stripeEventId`; if present, return 200" is a
+   `SELECT`-then-act - exactly the pattern T20 exists to refute. Stripe's
+   retries overlap, so two deliveries both read "absent", both proceed, both
+   issue tickets. The guarantee cannot come from the read. The `INSERT` is moved
+   to the **very first statement** in the transaction, where the unique index
+   makes a concurrent duplicate *block* and then fail 23505. The pre-check is
+   not kept at all: it would be a second code path to maintain that provably
+   decides nothing.
+
+2. **`checkout.session.completed` DOES NOT MEAN PAID,** and the brief never
+   mentions it. The event fires when the customer finishes the flow; for a
+   delayed payment method that is before money moves, with `payment_status:
+   'unpaid'`. Fulfilling on the event type alone is the easiest way to give away
+   free tickets. `payment_status` is now the authority (test 4 proves an unpaid
+   session issues nothing), and `async_payment_succeeded` / `..._failed` are
+   wired because enabling UPI or a bank debit is a **dashboard toggle, not a
+   code change**.
+
+3. **The status code is the API, and 500-vs-200 is the whole ballgame.** Stripe
+   retries any non-2xx for three days. So the queries encode a strict contract:
+   **return** a value for anything *decided* (the transaction commits, the
+   event is marked seen, route answers 200) and **throw** only for *transient*
+   failure (rollback, 500, Stripe retries into a clean slate). Getting it
+   backwards either silently drops a real payment or hammers the endpoint for
+   three days.
+
+4. **A missing `STRIPE_WEBHOOK_SECRET` returns 500, not 400** - the T25
+   `Bearer undefined` lesson. An empty secret makes `constructEventAsync` throw,
+   which *looks* safe, but answering 400 would discard a genuine event as a bad
+   signature. 500 means Stripe retries once the variable is set.
+
+5. **Three facts must agree before money is recognised:** Stripe's
+   `amount_total`, `orders.totalCents`, and the live sum of `sections.priceCents`.
+   Any disagreement refuses to fulfil rather than reconciling (test 5). This keeps
+   `check-seed.mjs`'s "orders whose total <> sum of its items = 0" invariant true
+   by construction. Explicit trade-off: an organizer editing a price mid-checkout
+   becomes a manual review instead of a receipt whose lines do not add up.
+
+6. **`seat_conflict` is not auto-refunded.** If a seat is somehow undeliverable
+   after payment, the order is marked `failed` and logged as
+   `REFUND_REQUIRED_SEAT_CONFLICT` with the payment intent. A refund is a second
+   money movement needing its own idempotency story - if `refunds.create()`
+   succeeded and the follow-up write failed, the next retry would refund again.
+   Money moving as a side effect of a webhook retry is worse than the problem it
+   cleans up.
+
+7. **No rate limit on this route,** unlike every other POST in the app. Stripe's
+   traffic is legitimately bursty and shedding it produces *more* traffic later
+   as retries. Nothing touches the database until the HMAC verifies, so a forged
+   flood costs one HMAC each.
+
+8. **Expiry only releases *already-expired* holds belonging to that order's
+   user.** Without the `expires_at <= now()` clause, a buyer who abandoned
+   checkout, came back and re-held the same seats would have their **new, live**
+   hold released by the old session's expiry event. And a late `expired` event
+   for a **paid** order never releases anything (test 10) - out-of-order
+   delivery cannot take a valid ticket away.
+
+Also proven rather than asserted: every issued ticket's HMAC **actually
+verifies** via `verifyTicket`, and a forged signature does not (test 6); a
+tampered body and a payload older than the 300s tolerance are both rejected 400,
+so a captured payload cannot be replayed tomorrow (test 1).
+
+**Not verified by me: a real card payment through the Stripe CLI.** The suite
+signs genuine payloads with the real secret and exercises the full route, which
+is strictly more thorough on the idempotency and security paths than one manual
+`4242` purchase - but `stripe listen` + a browser checkout is still the last
+mile, and it needs the authenticated login this project cannot perform. The
+Stripe CLI is installed (v1.50.10) and ready for it.
 
 ---
 

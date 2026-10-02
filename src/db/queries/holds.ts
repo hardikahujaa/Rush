@@ -3,6 +3,7 @@ import "server-only";
 import { and, eq, inArray, isNull, lte, sql } from "drizzle-orm";
 
 import { db } from "@/db";
+import { isDeadlockError, isUniqueViolation } from "@/db/pg-error";
 import {
   holdIsLive,
   liveHoldOwner,
@@ -552,15 +553,31 @@ export async function releaseExpiredHolds(): Promise<{
 
 /* ── postgres error mapping ─────────────────────────────────────────────── */
 
-type PgError = { code?: string; constraint_name?: string };
-
-/** True for a unique violation on the live-hold index - layer 2 firing. */
+/**
+ * True for a unique violation on the live-hold index - layer 2 firing.
+ *
+ * ── FIXED IN T28: THIS NEVER MATCHED ──────────────────────────────────────
+ * Both of these used to read `(error as PgError).code` off the top level of
+ * whatever was thrown. Drizzle does not throw the driver's error though - it
+ * throws a `DrizzleQueryError` and hangs the `PostgresError` (the one actually
+ * carrying `code` and `constraint_name`) on `.cause`. So `code` was always
+ * `undefined`, both functions were always false, and the carefully written
+ * 409 and 503 branches in the route handler were dead code.
+ *
+ * This is visible in T21's own negative-control output. With `.for("update")`
+ * removed, it reported "Server Errors: 15" - those fifteen were
+ * `one_live_hold_per_seat` doing exactly its job, but because the code could
+ * not be read they fell through to the generic 500 "Could not hold those
+ * seats" instead of the honest 409 "Someone just took that seat." The
+ * database was always right; the error mapping was discarding its answer.
+ *
+ * `isUniqueViolation` walks the cause chain. See src/db/pg-error.ts.
+ */
 export function isLiveHoldViolation(error: unknown): boolean {
-  const e = error as PgError;
-  return e?.code === "23505" && e?.constraint_name === "one_live_hold_per_seat";
+  return isUniqueViolation(error, "one_live_hold_per_seat");
 }
 
 /** True for a Postgres deadlock. Should be unreachable given the lock ordering. */
 export function isDeadlock(error: unknown): boolean {
-  return (error as PgError)?.code === "40P01";
+  return isDeadlockError(error);
 }

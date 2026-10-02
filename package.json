@@ -20,6 +20,7 @@
     "countdown-test": "tsx --conditions=react-server --env-file=.env.local scripts/countdown-test.ts",
     "release-test": "tsx --conditions=react-server --env-file=.env.local scripts/release-test.ts",
     "checkout-test": "tsx --conditions=react-server --env-file=.env.local scripts/checkout-test.ts",
+    "webhook-test": "tsx --conditions=react-server --env-file=.env.local scripts/webhook-test.ts",
     "race-test": "tsx --conditions=react-server --env-file=.env.local scripts/race-test.ts"
   },
   "dependencies": {
