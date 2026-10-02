@@ -49,6 +49,16 @@ const RULES: { prefix: string; roles: Role[] | null }[] = [
   { prefix: "/scan", roles: ["staff", "organizer"] },
   { prefix: "/dashboard", roles: null },
   { prefix: "/tickets", roles: null },
+  /**
+   * An order page shows seat numbers, what was paid and ticket ids. A signed-out
+   * visitor holding the link gets bounced to sign in here rather than reaching
+   * the page at all.
+   *
+   * This is the fast gate, NOT the check that enforces it. `getOrderForUser`
+   * puts `user_id = $me` in its WHERE clause, so even a signed-in stranger who
+   * reaches the page sees notFound() - that is the layer that actually decides.
+   */
+  { prefix: "/orders", roles: null },
 ];
 
 function ruleFor(pathname: string) {

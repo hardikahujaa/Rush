@@ -958,7 +958,7 @@ Stripe CLI is installed (v1.50.10) and ready for it.
 
 ---
 
-### ☐ T29 🟢 — Success page
+### ☑ T29 🟢 — Success page
 
 **Prompt:**
 
@@ -967,6 +967,94 @@ Stripe CLI is installed (v1.50.10) and ready for it.
 **Commit:** `feat: order success page`
 
 > 🎓 That polling detail is a real-world touch most student projects miss — payment confirmation is asynchronous.
+
+**Done.** `src/app/(site)/orders/[id]/success/page.tsx` (server) +
+`src/components/orders/success-view.tsx` (client) +
+`GET /api/orders/[id]/status` for the poll. `npm run success-test` - 18 checks.
+
+**The security boundary is the real work here, and it is a WHERE clause.** An
+order id is a uuid in a URL - it gets pasted into chats, screenshots and support
+tickets - and the page shows seat numbers, what was paid, and ticket ids (half of
+what a QR encodes). `getOrderForUser` carries `user_id = $me` in the query
+itself, so a stranger's request matches no row. There is no
+`if (order.userId !== user.id)` for a later edit to delete. Same reasoning as
+`releaseHolds` in T25.
+
+Proven adversarially, which is the only way worth proving it: test 2 has a
+*different signed-in buyer* ask for a real paid order id and get `null` from both
+the page query and the poll query. Verified over HTTP too - signed out, the page
+answers `307 -> /login?next=/orders/<id>/success` and the API answers `401` JSON
+rather than a redirect, because a polling `fetch()` would follow a 307 and try to
+parse a login form as JSON.
+
+**`notFound()` for "not yours", never 403.** A 403 confirms the order exists, and
+the id is the only thing in the URL. "Bad id" and "someone else's id" are
+deliberately indistinguishable (test 3).
+
+**`?session_id` is read and deliberately ignored.** Stripe puts it in
+`success_url` and it is tempting to treat it as proof of payment. It is a query
+parameter: browser-controlled, covered by no signature. Authorisation comes from
+the session cookie plus the ownership clause; payment status comes from the
+webhook. Nothing on this page decides anything from it.
+
+**The page does NOT fulfil the order as a fallback.** A common pattern is to
+retrieve the session here and fulfil it if the webhook is late. Deliberately not
+done: T28's idempotency is keyed on `webhook_events.stripe_event_id`, and a
+request from a browser has no event id to key on. A second writer with no shared
+gate is exactly the duplicate-ticket bug the webhook exists to prevent. One
+writer, one gate; this route only ever reads.
+
+**What the poll is actually for.** Stripe redirects the buyer the instant they
+pay, while the webhook travels a separate path - so the redirect usually wins and
+the order is still `pending` on first render. The page therefore has to tolerate
+an order with a frozen total and *zero seat lines* (test 4 asserts exactly that
+state, since `order_items` is written by the webhook, per T27). It polls every 2s
+for 20s, then stops with an honest "still confirming, your seats are safe" state
+and a Check again button - never an infinite spinner.
+
+**UI/UX follows the existing Obsidian & Champagne language, not a new one:**
+`.glass` stub on true black, `.text-metal` heading, `btn-gold` / `btn-gold-outline`
+actions, `.rule-fade` dividers, `formatPaise` for money, `tabular-nums`
+everywhere a number appears, and the stub's top edge carries the state as a
+gradient hairline the way the T24 hold banner's border does.
+
+**Motion, with the project's accessibility discipline:**
+- the tick is **drawn** via SVG `pathLength` 0 -> 1 rather than fading in a
+  finished glyph - a mark being drawn reads as something that just completed.
+  `pathLength` normalises the path to 0..1, so the animation needs no
+  hand-computed `stroke-dasharray`.
+- a one-shot radial halo scales out behind the crest on arrival
+- seat lines stagger in at 70ms intervals, so they read as tickets being issued
+  one at a time rather than a block appearing
+- confetti in the **brand palette** (champagne -> amber), two offset origins
+  rather than one centred blast - a single origin reads as a graphic, two read
+  as a room
+- **every one of those is gated on `useReducedMotion`**, and the confetti is
+  additionally `disableForReducedMotion: true` *and* lazily imported inside the
+  handler, so a visitor who asked their OS for less motion never downloads the
+  ~7kB library at all
+
+**`cache: "no-store"` on the poll is load-bearing.** Without it the browser is
+free to serve the first response to every subsequent poll, and the page would sit
+on "confirming" forever while the order had long since been paid.
+
+**One lint finding worth recording, because it is the third time in this
+project.** The first draft set the `timeout` state from inside the poll effect
+and `react-hooks/set-state-in-effect` refused it. It is now **derived** -
+`attempts >= POLL_LIMIT` *is* the timeout - so there is no second copy of that
+fact to drift and no cascading render.
+
+**Not verified by me: the page rendered in a signed-in browser.** Same
+limitation stated at T20, T27 and T28 - it needs a real login, and the seeded
+buyers have a `public.users` row but no Supabase Auth password. What *is*
+verified: both auth layers over real HTTP, the ownership rule against a real
+stranger, the paid and pending data shapes, every design token resolved against
+`globals.css`, and a clean `next build` registering both routes.
+
+**Phase 6 is complete.** T26-T29 all ticked. Full regression after this task:
+hold 20 / expiry 18 / release 18 / checkout 24 / webhook 50 / success 18, race
+test 1 winner + 49 conflicts + 0 errors, and `check-seed.mjs` reports zero
+oversells with seed data fully consistent.
 
 ---
 
@@ -1231,7 +1319,7 @@ Grab a domain (free with the GitHub Student Pack) and point it at Vercel.
 | 3 · Auth | T13–T16 | ☐ |
 | 4 · Public pages | T17–T18 | ☐ |
 | 5 · **Booking engine** | T19–T25 | ☐ |
-| 6 · Payments | T26–T29 | ☐ |
+| 6 · Payments | T26–T29 | ☑ |
 | 7 · Tickets & check-in | T30–T32 | ☐ |
 | 8 · Realtime | T33 | ☐ |
 | 9 · Waiting room | T34–T35 | ☐ |

@@ -4,7 +4,16 @@ import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 
 import { db } from "@/db";
 import { holdIsLive } from "@/db/queries/availability";
-import { events, holds, orders, seats, sections } from "@/db/schema";
+import {
+  events,
+  holds,
+  orderItems,
+  orders,
+  seats,
+  sections,
+  tickets,
+  venues,
+} from "@/db/schema";
 
 /**
  * Stripe's own floor, not a number we picked: `Checkout.Session.expires_at`
@@ -259,4 +268,129 @@ export async function deleteOrphanedPendingOrder(orderId: string): Promise<void>
         isNull(orders.stripeSessionId),
       ),
     );
+}
+
+/* ── reading an order back (T29) ────────────────────────────────────────── */
+
+export type OrderSeatLine = {
+  seatId: string;
+  sectionName: string;
+  rowLabel: string;
+  seatNo: number;
+  priceCents: number;
+  /** Null until the webhook has issued tickets - i.e. until payment landed. */
+  ticketId: string | null;
+};
+
+export type OrderView = {
+  orderId: string;
+  status: "pending" | "paid" | "failed" | "refunded";
+  totalCents: number;
+  createdAt: Date;
+  eventId: string;
+  eventTitle: string;
+  venueName: string;
+  venueCity: string;
+  startsAt: Date;
+  seats: OrderSeatLine[];
+};
+
+/**
+ * One order, for ONE user, with its seats and (once paid) its tickets.
+ *
+ * ── OWNERSHIP IS A WHERE CLAUSE, NOT A BRANCH ──────────────────────────────
+ * `user_id = $me` sits inside the query rather than being checked by the
+ * caller afterwards. Same reasoning as `releaseHolds` in queries/holds.ts: an
+ * order belonging to somebody else simply does not match, so there is no
+ * `if (order.userId !== user.id)` for a future edit to forget, and no window
+ * between reading and deciding.
+ *
+ * That matters more here than it looks. An order id is a uuid in a URL that
+ * gets pasted into chats and screenshots. Without this clause, anyone holding
+ * the link could read another person's seat numbers, what they paid, and their
+ * ticket ids - and ticket ids are half of what a QR encodes.
+ *
+ * Returns null for "no such order" AND for "not yours", deliberately
+ * indistinguishable: the caller renders notFound() either way. A 403 would
+ * confirm the order exists, which is itself a small leak.
+ *
+ * ── WHY SEATS COME FROM order_items, NOT FROM THE HOLDS ────────────────────
+ * `order_items` is the permanent record written by the webhook at confirmed
+ * payment (T28); the holds are released seconds later and tell you nothing
+ * about what was bought. Reading the holds would make this page go blank the
+ * moment the purchase actually succeeded.
+ *
+ * The LEFT JOIN onto tickets is what lets this page be honest while the
+ * webhook is still in flight: a pending order has order lines but no tickets,
+ * so `ticketId` is null and the UI shows "confirming" rather than inventing a
+ * ticket that does not exist yet.
+ */
+export async function getOrderForUser(
+  orderId: string,
+  userId: string,
+): Promise<OrderView | null> {
+  const [order] = await db
+    .select({
+      orderId: orders.id,
+      status: orders.status,
+      totalCents: orders.totalCents,
+      createdAt: orders.createdAt,
+      eventId: events.id,
+      eventTitle: events.title,
+      venueName: venues.name,
+      venueCity: venues.city,
+      startsAt: events.startsAt,
+    })
+    .from(orders)
+    .innerJoin(events, eq(events.id, orders.eventId))
+    .innerJoin(venues, eq(venues.id, events.venueId))
+    .where(and(eq(orders.id, orderId), eq(orders.userId, userId)))
+    .limit(1);
+
+  if (!order) return null;
+
+  const lines = await db
+    .select({
+      seatId: seats.id,
+      sectionName: sections.name,
+      rowLabel: seats.rowLabel,
+      seatNo: seats.seatNo,
+      priceCents: orderItems.priceCents,
+      ticketId: tickets.id,
+    })
+    .from(orderItems)
+    .innerJoin(seats, eq(seats.id, orderItems.seatId))
+    .innerJoin(sections, eq(sections.id, seats.sectionId))
+    .leftJoin(tickets, eq(tickets.seatId, orderItems.seatId))
+    .where(eq(orderItems.orderId, orderId))
+    .orderBy(sections.priceCents, seats.rowLabel, seats.seatNo);
+
+  return { ...order, seats: lines };
+}
+
+/**
+ * Just the status, for the success page's poll.
+ *
+ * Kept separate from `getOrderForUser` on purpose: the poll fires every two
+ * seconds and only ever asks one question, so it has no business joining four
+ * tables to answer it. Ownership is enforced the same way.
+ */
+export async function getOrderStatusForUser(
+  orderId: string,
+  userId: string,
+): Promise<{ status: OrderView["status"]; ticketCount: number } | null> {
+  const [order] = await db
+    .select({ status: orders.status })
+    .from(orders)
+    .where(and(eq(orders.id, orderId), eq(orders.userId, userId)))
+    .limit(1);
+
+  if (!order) return null;
+
+  const issued = await db
+    .select({ id: tickets.id })
+    .from(tickets)
+    .where(eq(tickets.orderId, orderId));
+
+  return { status: order.status, ticketCount: issued.length };
 }
