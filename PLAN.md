@@ -1224,6 +1224,93 @@ codec whose two halves are written three tasks apart drifts.
 
 ---
 
+### ☑ PRE-T31 FIX — the three blockers that stopped end-to-end testing
+
+Not a numbered task; recorded here because it corrected a defect that shipped in
+T19 and a structural gap left by skipping T17.
+
+**Reported:** blank seat map, event dated "September 14, 2026" (past), and a
+"Hold Seats" button that did nothing at all for a freshly registered user. The
+brief proposed a React crash, an unhandled error and an empty array. **All three
+hypotheses were wrong, and all three symptoms had one root cause.**
+
+**ROOT CAUSE: the homepage linked 18 mock events and 0 real ones.** Measured:
+
+    curl -s localhost:3000/ | grep -o 'href="/events/[^"]*"' | sort -u
+      real DB events linked: 0      mock events linked: 18
+
+T17 was skipped, so every rail rendered `src/lib/mock-events.ts`, whose seat ids
+(`rc-3-front-A3`) exist nowhere in Postgres. `resolveSeatMap` correctly reports
+`canHold: false` for those — so **there was no route through the UI to an event
+anyone could buy.** Each symptom follows:
+
+1. **"September 14, 2026"** — `mock-events.ts` hardcoded all 18 dates as literal
+   September 2026 strings. Separately, all three *database* events were ~40 days
+   stale (`starts_at` 08-17 / 08-27 / 09-03 against a db clock of 10-03). The
+   seed itself was always fine — it uses `Date.now() + n * DAY`; the rows were
+   just old.
+
+2. **"Blank seat map" — not a crash; the server rendered 226 seat buttons.**
+   176 of those 226 were *sold*, and T19 styled sold as `#000000` with a
+   `rgba(255,255,255,0.05)` border on a `bg-black` floor. Measured: **1.08:1**,
+   where WCAG 1.4.11 asks 3:1. The seats were all in the DOM and simply could not
+   be seen — a nearly sold-out show rendering as an empty room.
+
+3. **"Button completely unresponsive, no loading state, no error"** — exactly
+   right, and it was a `disabled` attribute, not a failed request. No handler
+   fires, so there is nothing to catch. Worse, the *explanation* lived inside the
+   `selected.length === 0` branch, so it **vanished the moment a seat was
+   picked** — leaving only a `title` tooltip, which does not exist on touch.
+
+**Fixes**
+
+- **`npm run fix-dates`** (new, non-destructive). `db:seed` would have fixed the
+  dates but deletes all tickets, orders and events first — including the user's
+  own purchases. This shifts every event by one uniform interval anchored on the
+  live show, preserving each `drop_at`→`starts_at` gap and the
+  live/scheduled/ended spread, and touches only the `events` table. Prints
+  before/after plus the untouched counts (142 orders, 345 tickets, 44 users), and
+  is naturally idempotent — a second run computes a 0-day shift.
+- **Mock dates derived from `Date.now()`**, the old day-of-month becoming the
+  offset so the rails keep their original spacing. This forced a real
+  architectural fix: seven **client** components imported `formatPaise` from
+  `mock-events`, so a relative date there would have been computed twice — once
+  per clock — and straddled midnight into a hydration mismatch. `formatPaise`
+  moved to **`src/lib/format.ts`**, and `mock-events.ts` is now `server-only`, so
+  the compiler proves the boundary instead of a comment promising it.
+- **Sold seats raised to 3.60:1** (`#121212` + 35% hairline), measured. T19's
+  "quietest thing in the room" intent is intact — the hierarchy was never carried
+  by luminance alone: an available seat's tier border measures **13.71:1**,
+  nearly 4× brighter and a different hue. "Quiet" has to still mean visible, and
+  1.08:1 was absent. The legend swatch was raised with it; a key that shows a
+  different colour from the thing it describes is worse than no key.
+- **A sold-out / "nearly sold out" notice** on the seats page, derived from the
+  `stats` the header already computes — so the two numbers cannot disagree.
+- **The demo-listing reason is now persistent**, with `role="status"`, and points
+  at "Live now". Every outcome on that button now says something.
+- **"Live now" rail** on the homepage (`getLiveEvents()`), reading real Postgres
+  rows through the same `EventCard`. `EventCard`'s prop type was widened from
+  `MockEvent` to an exported `EventCardData`, because typing it as the mock
+  catalogue had made the mock data the *definition* of a renderable event.
+- **`error.tsx` for the seats segment** — there were zero error boundaries in the
+  app. Not the fix for the reported blank map, but its absence is what made that
+  symptom undiagnosable from outside.
+
+**A bug I introduced and caught, worth recording because the project already
+documents the trap:** `getLiveEvents` typed a raw-`execute` column as `Date`.
+`db.execute()` bypasses Drizzle's column mapping, so a `timestamptz` arrives as a
+**string** — `row.starts_at.toISOString is not a function`, thrown at runtime
+after a clean typecheck. The identical footgun is called out in
+`db/queries/holds.ts` step 8. It also failed in precisely the way this whole task
+was about: the rail silently did not render.
+
+**Regression:** hold 20 / expiry 18 / release 18 / checkout 24 / webhook 50 /
+success 18 / ticket 36, the T21 race test (1 winner, 49 conflicts, 0 errors, zero
+oversells), `verify-seat-math` (14 events, all invariants hold), and
+`check-seed.mjs` fully consistent.
+
+---
+
 ### ☐ T31 🔴 — Gate scanner
 
 **Prompt:**

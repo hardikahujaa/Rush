@@ -3,6 +3,7 @@ import { EventRail } from "@/components/home/event-rail";
 import { Hero } from "@/components/home/hero";
 import { QuickFilters } from "@/components/home/quick-filters";
 import { Upcoming } from "@/components/home/upcoming";
+import { getLiveEvents } from "@/db/queries/events";
 import {
   RECOMMENDED,
   SELLING_FAST,
@@ -17,16 +18,41 @@ import {
  * might not have considered, what has not opened yet. Urgency leads because it
  * is the only section with a deadline attached.
  *
- * All rails render MOCK data from src/lib/mock-events.ts. Every component takes
- * its data as props, so wiring real queries later changes the source, not the
- * shape.
+ * ── "LIVE NOW" IS REAL; THE RAILS BELOW IT ARE NOT ────────────────────────
+ * The first rail reads genuine rows from Postgres via `getLiveEvents()`. Every
+ * rail beneath it still renders MOCK data from src/lib/mock-events.ts, whose
+ * seat ids exist nowhere in the database - so those listings deliberately
+ * cannot be held or bought, and the seat map says so.
+ *
+ * That distinction was previously invisible, and it was the whole bug: with 18
+ * mock events linked from here and 0 real ones, there was no route through the
+ * UI to an event anyone could actually buy. "Live now" is the route.
+ *
+ * Every component still takes its data as props, so finishing T17 means
+ * swapping the sources, not the shapes.
  */
-export default function HomePage() {
+export default async function HomePage() {
+  const liveEvents = await getLiveEvents();
+
   return (
     <>
       <Hero />
 
       <QuickFilters />
+
+      {/* Rendered only when there is something genuinely on sale - an empty
+          "Live now" rail would be worse than none, and it is the honest state
+          when no event has dropped yet. */}
+      {liveEvents.length > 0 && (
+        <EventRail
+          id="live-now"
+          eyebrow="Live now"
+          title="On sale this minute"
+          description="Real events, real inventory. These are the ones you can hold and pay for — seat counts come straight from the availability query."
+          events={liveEvents}
+          accentHue={82}
+        />
+      )}
 
       <EventRail
         id="selling-fast"

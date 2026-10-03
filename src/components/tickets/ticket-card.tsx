@@ -5,7 +5,7 @@ import { QRCodeSVG } from "qrcode.react";
 import { motion, useMotionValue, useReducedMotion, useSpring } from "framer-motion";
 import { CheckCircle2 } from "lucide-react";
 
-import { formatPaise } from "@/lib/mock-events";
+import { formatPaise } from "@/lib/format";
 
 export type TicketCardData = {
   ticketId: string;

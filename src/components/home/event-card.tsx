@@ -2,7 +2,33 @@ import Link from "next/link";
 import { CalendarDays, MapPin } from "lucide-react";
 
 import { SeatCounter } from "@/components/home/seat-counter";
-import { formatPaise, type MockEvent } from "@/lib/mock-events";
+import { formatPaise } from "@/lib/format";
+/**
+ * What this card needs, independent of where the row came from.
+ *
+ * It used to be typed as `MockEvent`, which quietly made the mock catalogue the
+ * definition of a renderable event - so the real database rows could not use
+ * this card without inventing a `subtitle` and a `category` they do not have
+ * columns for. Widening it here lets the "Live now" rail render genuine
+ * Postgres events through the exact same component, which is the point: a real
+ * event and a demo one must be visually indistinguishable, or the rail is a
+ * second design to maintain.
+ */
+export type EventCardData = {
+  id: string;
+  title: string;
+  subtitle?: string | null;
+  category?: string | null;
+  venue: string;
+  city: string;
+  /** ISO string. */
+  startsAt: string;
+  hues: [number, number];
+  tag?: "trending" | "just-announced" | "final-release";
+  fromPriceCents: number;
+  seatsLeft: number;
+  seatsTotal: number;
+};
 import { cn } from "@/lib/utils";
 
 /** "Sat, 4 Sep · 7:30 PM" */
@@ -45,7 +71,7 @@ export function EventCard({
   event,
   className,
 }: {
-  event: MockEvent;
+  event: EventCardData;
   className?: string;
 }) {
   const scarcity = urgency(event.seatsLeft, event.seatsTotal);
@@ -102,7 +128,9 @@ export function EventCard({
           <h3 className="text-balance text-lg font-semibold leading-tight tracking-[-0.02em] text-foreground">
             {event.title}
           </h3>
-          <p className="mt-0.5 truncate text-xs text-foreground/65">{event.subtitle}</p>
+          {event.subtitle && (
+            <p className="mt-0.5 truncate text-xs text-foreground/65">{event.subtitle}</p>
+          )}
         </div>
       </div>
 

@@ -1,7 +1,7 @@
 "use client";
 
 import type { TierWithStats } from "@/lib/mock-data";
-import { formatPaise } from "@/lib/mock-events";
+import { formatPaise } from "@/lib/format";
 
 /**
  * The price key, above the map.

@@ -5,7 +5,7 @@ import { ArrowLeft, CalendarDays, MapPin, Ticket } from "lucide-react";
 
 import { EventCTA } from "@/components/events/event-cta";
 import { findEvent } from "@/lib/event-lookup";
-import { formatPaise } from "@/lib/mock-events";
+import { formatPaise } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 type Props = { params: Promise<{ id: string }> };

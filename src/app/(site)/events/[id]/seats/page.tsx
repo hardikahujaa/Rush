@@ -157,6 +157,42 @@ export default async function SeatsPage({ params }: Props) {
             )}
           </p>
 
+          {/*
+            SAY IT WHEN THE ROOM IS NEARLY GONE.
+
+            A map where 78% of the seats are sold used to read as a rendering
+            failure rather than a sold-out show - the count above was accurate
+            and nobody connected it to the dark grid below. Raising the sold-seat
+            contrast fixed the grid; this states the same fact in words, because
+            "is this broken or is it just full?" should not be a question a
+            buyer has to answer by squinting.
+
+            Thresholds are derived from the stats the header already computes -
+            no new query, and the two numbers cannot disagree.
+          */}
+          {stats.total > 0 && stats.available === 0 ? (
+            <div
+              role="status"
+              className="glass mt-4 rounded-xl border-destructive/25 px-4 py-3"
+            >
+              <p className="text-sm font-medium text-foreground">
+                This show is sold out
+              </p>
+              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                Every seat is taken. Seats occasionally return when someone&rsquo;s
+                checkout expires, so it is worth refreshing.
+              </p>
+            </div>
+          ) : stats.total > 0 && stats.available / stats.total < 0.2 ? (
+            <p
+              role="status"
+              className="mt-4 inline-flex items-center gap-2 rounded-full border border-gold/30 bg-gold/10 px-3 py-1.5 text-[11px] font-medium text-gold-champagne"
+            >
+              <span aria-hidden="true" className="size-1.5 rounded-full bg-gold" />
+              Nearly sold out — most of this room is already gone
+            </p>
+          ) : null}
+
           <div className="mt-6">
             <SeatMap
               eventId={id}

@@ -1,10 +1,10 @@
 "use client";
 
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { Loader2, ShoppingCart, X } from "lucide-react";
+import { Info, Loader2, ShoppingCart, X } from "lucide-react";
 
 import type { Seat, Tier } from "@/lib/mock-data";
-import { formatPaise } from "@/lib/mock-events";
+import { formatPaise } from "@/lib/format";
 
 export const MAX_SEATS = 4;
 
@@ -79,11 +79,39 @@ export function CheckoutBar({
       >
         {/* ── left: what is in the cart ─────────────────────────────────── */}
         <div className="min-w-0 flex-1">
+          {/*
+            THE REASON THE BUTTON IS DEAD, AND IT NO LONGER DISAPPEARS.
+
+            This explanation used to live inside the `selected.length === 0`
+            branch below, which meant it vanished the instant someone picked a
+            seat - exactly when they were about to press the button it explains.
+            From then on the only hint was a `title` tooltip, which does not
+            exist on a touchscreen.
+
+            The reported symptom was "the Hold Seats button is completely
+            unresponsive - no loading state, no error, no action", and that is
+            precisely right: `canHold` is false, so the button carries a
+            `disabled` attribute, no handler fires, and there is no request to
+            fail or error to catch. Nothing was broken; nothing was explained
+            either. Now the reason is always on screen whenever holding is
+            impossible.
+          */}
+          {!canHold && (
+            <p
+              role="status"
+              className="mb-2 inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/5 px-3 py-1.5 text-[11px] font-medium text-foreground/90"
+            >
+              <Info className="size-3.5 shrink-0 text-gold" aria-hidden="true" />
+              Demo listing — these seats cannot be reserved. Pick an event from
+              &ldquo;Live now&rdquo; to buy for real.
+            </p>
+          )}
+
           {selected.length === 0 ? (
             <p className="text-sm text-muted-foreground">
               {canHold
                 ? `Choose up to ${MAX_SEATS} seats to continue`
-                : "Demo listing — seats here cannot be reserved"}
+                : "This is a preview of the seat map."}
             </p>
           ) : (
             <>

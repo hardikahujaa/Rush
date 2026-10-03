@@ -1,3 +1,5 @@
+import "server-only";
+
 /**
  * Mock event data for the homepage rails.
  *
@@ -46,9 +48,41 @@ export type MockEvent = RawMockEvent & {
   seatsTotal: number;
 };
 
-/** Rs 4,999 from 499900. Grouped in the Indian system. */
-export function formatPaise(paise: number): string {
-  return `₹${Math.round(paise / 100).toLocaleString("en-IN")}`;
+/**
+ * A demo date, N days from now, at a fixed IST wall-clock time.
+ *
+ * ── WHY THESE ARE NOT LITERAL STRINGS ANY MORE ─────────────────────────────
+ * They used to be hardcoded as "2026-09-14T21:00:00+05:30" and friends. That is
+ * fine on the day it is written and quietly wrong a month later: by October the
+ * entire homepage was advertising shows that had already happened, and the
+ * detail page's countdown had nothing to count down to. A demo whose dates rot
+ * is a demo that stops demonstrating.
+ *
+ * The day-of-month from the old literal becomes the offset, so the original
+ * spacing and ordering of the rails is preserved exactly - rc-3 was the 14th,
+ * so it is now 14 days out.
+ *
+ * ── WHY THIS MODULE IS `server-only` ──────────────────────────────────────
+ * `Date.now()` at module scope is evaluated wherever the module is loaded. Seven
+ * CLIENT components used to import `formatPaise` from this file, which would
+ * have meant the browser computing its own "now" and rendering a date the server
+ * disagreed with - a hydration mismatch straddling midnight, on the one value a
+ * ticketing product must not get wrong. `formatPaise` now lives in
+ * `src/lib/format.ts`, and the `server-only` import at the top of this file
+ * turns any future client import into a build error instead of a silent bug.
+ */
+function inDays(days: number, istTime: string): string {
+  const target = new Date(Date.now() + days * 86_400_000);
+  /* en-CA formats as YYYY-MM-DD, and the IST timezone is applied before the
+     date is read - so the calendar day is the one a viewer in India sees, not
+     the server's UTC day. */
+  const ymd = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(target);
+  return `${ymd}T${istTime}:00+05:30`;
 }
 
 const RAW_SELLING_FAST: RawMockEvent[] = [
@@ -59,7 +93,7 @@ const RAW_SELLING_FAST: RawMockEvent[] = [
     category: "Live Concerts",
     venue: "Nehru Indoor Stadium",
     city: "Chennai",
-    startsAt: "2026-09-04T19:30:00+05:30",
+    startsAt: inDays(4, "19:30"),
     hues: [95, 88],
     tag: "final-release",
   },
@@ -70,7 +104,7 @@ const RAW_SELLING_FAST: RawMockEvent[] = [
     category: "Live Concerts",
     venue: "Jio World Garden",
     city: "Mumbai",
-    startsAt: "2026-09-11T20:00:00+05:30",
+    startsAt: inDays(11, "20:00"),
     hues: [88, 62],
     tag: "trending",
   },
@@ -81,7 +115,7 @@ const RAW_SELLING_FAST: RawMockEvent[] = [
     category: "Comedy & Theater",
     venue: "Ranga Shankara",
     city: "Bengaluru",
-    startsAt: "2026-09-06T19:00:00+05:30",
+    startsAt: inDays(6, "19:00"),
     hues: [75, 45],
     tag: "final-release",
   },
@@ -92,7 +126,7 @@ const RAW_SELLING_FAST: RawMockEvent[] = [
     category: "Sports",
     venue: "Salt Lake Stadium",
     city: "Kolkata",
-    startsAt: "2026-09-19T19:45:00+05:30",
+    startsAt: inDays(19, "19:45"),
     hues: [62, 88],
     tag: "trending",
   },
@@ -106,7 +140,7 @@ const RAW_RECOMMENDED: RawMockEvent[] = [
     category: "Experiences & Fests",
     venue: "Island Grounds",
     city: "Chennai",
-    startsAt: "2026-09-27T16:00:00+05:30",
+    startsAt: inDays(27, "16:00"),
     hues: [95, 45],
     tag: "trending",
   },
@@ -117,7 +151,7 @@ const RAW_RECOMMENDED: RawMockEvent[] = [
     category: "Movies",
     venue: "Sathyam Cinemas",
     city: "Chennai",
-    startsAt: "2026-09-02T21:15:00+05:30",
+    startsAt: inDays(2, "21:15"),
     hues: [55, 95],
   },
   {
@@ -127,7 +161,7 @@ const RAW_RECOMMENDED: RawMockEvent[] = [
     category: "Live Concerts",
     venue: "Music Academy",
     city: "Chennai",
-    startsAt: "2026-09-14T21:00:00+05:30",
+    startsAt: inDays(14, "21:00"),
     hues: [88, 55],
   },
   {
@@ -137,7 +171,7 @@ const RAW_RECOMMENDED: RawMockEvent[] = [
     category: "Workshops",
     venue: "Studio 41",
     city: "Chennai",
-    startsAt: "2026-09-21T10:00:00+05:30",
+    startsAt: inDays(21, "10:00"),
     hues: [55, 75],
     tag: "final-release",
   },
@@ -151,7 +185,7 @@ const RAW_SPOTLIGHT_COMEDY: RawMockEvent[] = [
     category: "Comedy & Theater",
     venue: "Prithvi Theatre",
     city: "Mumbai",
-    startsAt: "2026-09-08T20:30:00+05:30",
+    startsAt: inDays(8, "20:30"),
     hues: [75, 95],
   },
   {
@@ -161,7 +195,7 @@ const RAW_SPOTLIGHT_COMEDY: RawMockEvent[] = [
     category: "Comedy & Theater",
     venue: "The Cuckoo Club",
     city: "Mumbai",
-    startsAt: "2026-09-13T21:00:00+05:30",
+    startsAt: inDays(13, "21:00"),
     hues: [45, 75],
   },
   {
@@ -171,7 +205,7 @@ const RAW_SPOTLIGHT_COMEDY: RawMockEvent[] = [
     category: "Comedy & Theater",
     venue: "Courtyard",
     city: "Bengaluru",
-    startsAt: "2026-09-17T20:00:00+05:30",
+    startsAt: inDays(17, "20:00"),
     hues: [62, 75],
   },
 ];
@@ -184,7 +218,7 @@ const RAW_SPOTLIGHT_MOVIES: RawMockEvent[] = [
     category: "Movies",
     venue: "PVR Icon",
     city: "Bengaluru",
-    startsAt: "2026-09-05T18:45:00+05:30",
+    startsAt: inDays(5, "18:45"),
     hues: [95, 55],
   },
   {
@@ -194,7 +228,7 @@ const RAW_SPOTLIGHT_MOVIES: RawMockEvent[] = [
     category: "Movies",
     venue: "AMB Cinemas",
     city: "Hyderabad",
-    startsAt: "2026-09-09T22:00:00+05:30",
+    startsAt: inDays(9, "22:00"),
     hues: [45, 95],
     tag: "final-release",
   },
@@ -205,7 +239,7 @@ const RAW_SPOTLIGHT_MOVIES: RawMockEvent[] = [
     category: "Movies",
     venue: "Regal Cinema",
     city: "Mumbai",
-    startsAt: "2026-09-15T19:00:00+05:30",
+    startsAt: inDays(15, "19:00"),
     hues: [88, 55],
   },
 ];
@@ -254,7 +288,7 @@ export const UPCOMING: UpcomingEvent[] = [
     subtitle: "Winter Residency",
     category: "Live Concerts",
     city: "Goa",
-    dropAt: "2026-09-01T11:00:00+05:30",
+    dropAt: inDays(1, "11:00"),
     hues: [88, 62],
   },
   {
@@ -263,7 +297,7 @@ export const UPCOMING: UpcomingEvent[] = [
     subtitle: "National Tour",
     category: "Comedy & Theater",
     city: "New Delhi",
-    dropAt: "2026-09-03T12:00:00+05:30",
+    dropAt: inDays(3, "12:00"),
     hues: [75, 45],
   },
   {
@@ -272,7 +306,7 @@ export const UPCOMING: UpcomingEvent[] = [
     subtitle: "Three-Day Paddock",
     category: "Sports",
     city: "Hyderabad",
-    dropAt: "2026-09-08T09:00:00+05:30",
+    dropAt: inDays(8, "09:00"),
     hues: [62, 88],
   },
   {
@@ -281,7 +315,7 @@ export const UPCOMING: UpcomingEvent[] = [
     subtitle: "Immersive Installation",
     category: "Experiences & Fests",
     city: "Pune",
-    dropAt: "2026-09-12T18:00:00+05:30",
+    dropAt: inDays(12, "18:00"),
     hues: [95, 45],
   },
 ];

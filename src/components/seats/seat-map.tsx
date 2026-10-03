@@ -10,7 +10,7 @@ import { SeatButton, keepClearOfCart } from "@/components/seats/seat-button";
 import { TierLegend } from "@/components/seats/tier-legend";
 import { FocalEdge, VenueFrame } from "@/components/seats/venue-frame";
 import type { Seat, TierWithStats, VenueType } from "@/lib/mock-data";
-import { formatPaise } from "@/lib/mock-events";
+import { formatPaise } from "@/lib/format";
 
 /** The 200 body from POST /api/holds. */
 type HoldSuccess = {
@@ -574,8 +574,11 @@ export function SeatMap({
           swatch={{ backgroundColor: "rgba(245,158,11,0.20)", borderColor: "rgba(245,158,11,0.45)" }}
           label="On hold"
         />
+        {/* Kept in step with SeatButton's sold skin by hand - a legend that
+            shows a different swatch from the thing it describes is worse than
+            no legend. Raised with it from 1.08:1 to 3.60:1. */}
         <Key
-          swatch={{ backgroundColor: "#000000", borderColor: "rgba(255,255,255,0.05)" }}
+          swatch={{ backgroundColor: "#121212", borderColor: "rgba(255,255,255,0.35)" }}
           label="Sold"
         />
         {mine.size > 0 && (

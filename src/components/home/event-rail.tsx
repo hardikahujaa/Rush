@@ -1,8 +1,7 @@
 import Link from "next/link";
 import { ArrowRight } from "lucide-react";
 
-import { EventCard } from "@/components/home/event-card";
-import type { MockEvent } from "@/lib/mock-events";
+import { EventCard, type EventCardData } from "@/components/home/event-card";
 import { cn } from "@/lib/utils";
 
 /**
@@ -29,7 +28,7 @@ export function EventRail({
   title: string;
   description?: string;
   href?: string;
-  events: MockEvent[];
+  events: EventCardData[];
   accentHue?: number;
   id?: string;
 }) {

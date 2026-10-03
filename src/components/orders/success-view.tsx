@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 
 import type { OrderView } from "@/db/queries/orders";
-import { formatPaise } from "@/lib/mock-events";
+import { formatPaise } from "@/lib/format";
 
 /** Poll every 2s for at most 20s, per the T29 brief. */
 const POLL_INTERVAL_MS = 2_000;

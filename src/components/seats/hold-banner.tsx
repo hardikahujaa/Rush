@@ -5,7 +5,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useReducedMotion } from "framer-motion";
 import { ArrowRight, CheckCircle2, Clock, Loader2 } from "lucide-react";
 
-import { formatPaise } from "@/lib/mock-events";
+import { formatPaise } from "@/lib/format";
 
 export type HeldSeatView = {
   holdId: string;

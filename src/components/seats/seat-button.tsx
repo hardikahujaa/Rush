@@ -3,7 +3,7 @@
 import { motion, useReducedMotion } from "framer-motion";
 
 import type { Seat, Tier } from "@/lib/mock-data";
-import { formatPaise } from "@/lib/mock-events";
+import { formatPaise } from "@/lib/format";
 
 /**
  * Scroll a newly focused seat out from under the checkout bar.
@@ -92,8 +92,24 @@ export function SeatButton({
          chosen". Crucially NOT the amber held fill, which means someone else. */
       mine
       ? { backgroundColor: "rgba(250,204,21,0.28)", borderColor: "#FACC15", color: "#FACC15" }
-      : seat.status === "sold"
-      ? { backgroundColor: "#000000", borderColor: "rgba(255,255,255,0.05)", color: "transparent" }
+      : /**
+         * Sold. STILL the quietest state in the room, but no longer invisible.
+         *
+         * This used to be `#000000` with a `rgba(255,255,255,0.05)` border on a
+         * `bg-black` map floor, which measures **1.08:1**. WCAG 1.4.11 asks for
+         * 3:1 on UI components, and 1.08:1 is not "quiet", it is "absent" - on a
+         * nearly sold-out show, 176 of 226 seats rendered as literally nothing
+         * and the map read as an empty room rather than a sold-out one. The
+         * seats were all there in the DOM; you simply could not see them.
+         *
+         * Now `#121212` with a 35% white hairline: **3.60:1**, measured. T19's
+         * intent is intact, because the hierarchy was never carried by luminance
+         * alone - an available seat's border is its tier colour at **13.71:1**,
+         * nearly four times brighter and a completely different hue. Attention
+         * still lands on what is buyable; what is gone is merely legible.
+         */
+        seat.status === "sold"
+      ? { backgroundColor: "#121212", borderColor: "rgba(255,255,255,0.35)", color: "transparent" }
       : seat.status === "held"
         ? { backgroundColor: "rgba(245,158,11,0.20)", borderColor: "rgba(245,158,11,0.45)", color: "transparent" }
         : { backgroundColor: "#1A1A1A", borderColor: tier.color, color: "transparent" };
