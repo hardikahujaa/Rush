@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 
 import { requireUser } from "@/lib/auth";
 
@@ -17,7 +18,14 @@ export default async function DashboardPage() {
         Signed in as {user.email} ({user.role}).
       </p>
       <p className="mt-8 text-sm text-muted-foreground">
-        Your tickets and order history will appear here.
+        Your order history will appear here. Signed QR tickets live on{" "}
+        <Link
+          href="/tickets"
+          className="text-gold-champagne underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          your tickets page
+        </Link>
+        .
       </p>
     </main>
   );

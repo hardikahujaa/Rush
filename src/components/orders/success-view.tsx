@@ -337,11 +337,15 @@ export function SuccessView({ order }: { order: OrderView }) {
         transition={{ duration: 0.5, delay: 0.46, ease: [0.16, 1, 0.3, 1] }}
         className="mt-7 flex flex-col gap-3 sm:flex-row"
       >
+        {/* Points at the tickets now that T30 exists. Until the webhook lands
+            there is nothing to show, so an unpaid order gets the dashboard
+            instead - a CTA that leads somewhere empty is worse than a modest
+            one that leads somewhere real. */}
         <Link
-          href="/dashboard"
+          href={paid ? "/tickets" : "/dashboard"}
           className="btn-gold inline-flex h-12 flex-1 items-center justify-center gap-2 rounded-xl px-6 text-[15px] font-bold uppercase tracking-wide outline-none transition-[filter] duration-300 hover:brightness-110 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-black"
         >
-          View your orders
+          {paid ? "View your tickets" : "View your orders"}
           <ArrowRight className="size-4 shrink-0" aria-hidden="true" />
         </Link>
         <Link
@@ -365,12 +369,22 @@ export function SuccessView({ order }: { order: OrderView }) {
         </button>
       )}
 
-      {/* Scannable QR codes are T30. Said plainly rather than shipping a button
-          that 404s - the same call T24 and T25 made about their own forward
-          references. */}
-      <p className="mt-6 text-center text-[11px] leading-relaxed text-muted-foreground">
-        Scannable QR tickets arrive in the next build step.
-      </p>
+      {/* T30 landed, so this is a real link now rather than the placeholder
+          note that stood here. Only offered once the order is actually paid -
+          before that there are no tickets to show, and sending someone to an
+          empty page is worse than not offering. */}
+      {paid && (
+        <p className="mt-6 text-center text-[11px] leading-relaxed text-muted-foreground">
+          Your signed QR codes are ready on{" "}
+          <Link
+            href="/tickets"
+            className="text-gold-champagne underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            your tickets page
+          </Link>
+          .
+        </p>
+      )}
     </div>
   );
 }

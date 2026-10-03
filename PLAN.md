@@ -1060,13 +1060,167 @@ oversells with seed data fully consistent.
 
 ## PHASE 7 — Tickets & gate check-in
 
-### ☐ T30 🔴 — Signed QR tickets
+### ☑ T30 🔴 — Signed QR tickets
 
 **Prompt:**
 
 > Add `QR_SIGNING_SECRET` to env. When tickets are created, set `qrSignature` to an HMAC-SHA256 of `{ticketId}.{orderId}.{seatId}` using that secret. Build `/tickets` listing the user's tickets as animated 3D-tilt cards, each rendering a QR code (use the `qrcode` package) encoding `{ticketId}:{signature}`. Explain why we sign the QR instead of just encoding the ticket id.
 
 **Commit:** `feat: signed QR tickets`
+
+**Done.** `src/lib/ticket-crypto.ts` is the codec, `src/db/queries/tickets.ts`
+the query, `src/app/(site)/tickets/page.tsx` the page, and
+`src/components/tickets/ticket-card.tsx` the stub. `npm run ticket-test` -
+**36 checks**.
+
+**The brief for this task arrived specifying `TICKET_SIGNING_SECRET` and a
+`{o: orderId, s: seatId, sig}` payload. Both were refused, and the reason is
+not style.** `src/lib/qr.ts` has signed every ticket since T28 as
+HMAC-SHA256(`ticketId.orderId.seatId`) keyed on `QR_SIGNING_SECRET`, and **345
+rows already carry those signatures** (written by the webhook and `seed.ts`,
+all 64 hex chars). A `sig` covering `(orderId, seatId)` is a *different
+preimage*, so it would match not one stored signature: every ticket ever issued
+would fail at the T31 gate, and `tickets.qr_signature` would stop describing
+what the QR contains. A second secret name would be a second value to keep in
+sync on Vercel, where a mismatch fails silently and only at the door.
+
+So the existing scheme is reused and `ticket-crypto.ts` **truncates** the
+existing signature rather than computing a new one. Test section 4 is the proof:
+50 sampled pre-T30 tickets each encode to a payload whose tag *is* the first 16
+bytes of their stored `qr_signature`. Nothing was re-signed, nothing migrated.
+
+**THE PAYLOAD - 33 bytes, 44 characters, fixed-width, no JSON:**
+
+    byte 0      bytes 1..16       bytes 17..32
+    [ ver=1 ] [ ticketId 16B ] [ tag 16B ]      -> base64url -> 44 chars
+
+    AZsaPP9PlEjcmtZY8ShvoQlCGF4f9XLF7dKbsa5QO-7h
+
+`orderId` and `seatId` are deliberately **absent**: the verifier loads the
+ticket row by `ticketId` and reads both off it, so putting them in the QR costs
+32 bytes to transmit data the server already holds. The tempting counter-
+argument is offline verification, and it does not survive contact with T31 -
+refusing a *second* scan requires shared state (`tickets.checked_in_at`), so a
+database round trip happens regardless of what the QR carries.
+
+**MEASURED, NOT ESTIMATED - and my own plan's number was wrong.** The plan
+predicted Version 3 (29x29). Rendering it says **Version 4, 33x33**: I had put
+QR's level-*L* capacity (53 bytes) in the level-*M* column, and v3-M actually
+holds 42, one short of this 44-character payload. Measuring it also found a free
+upgrade - **v4-Q holds 46 bytes, so error-correction level Q lands on the
+identical 33x33 grid with 25% recovery instead of 15%.** Taken, since glare on a
+glossy phone screen and moire against a webcam sensor is exactly the damage that
+redundancy absorbs.
+
+| payload | chars | version | modules |
+|---|---|---|---|
+| **this format, level Q** | **44** | **4** | **33 x 33** |
+| naive `uuid:hex-signature` | 101 | 6 | 41 x 41 |
+| the brief's literal `{o,s,sig}` JSON | 118 | 7 | 45 x 45 |
+
+**Truncating the tag to 128 bits is safe and buys something.** Forging requires
+2^128 candidates, each checkable only online against our server. And the browser
+is handed **half** the signature - the full 256-bit `qr_signature` never leaves
+Postgres (test section 7).
+
+**Forgery is refused five ways, each tested rather than asserted** (section 2):
+a single flipped character in the tag; ticket A's tag presented as ticket B;
+the correct tag with a swapped `seatId` (the "upgrade myself to the front row"
+attack); a hand-built payload with a zeroed tag; and the whole thing under a
+different secret, which must fail and then verify again once restored - proof
+the key is load-bearing and not decoration.
+
+**Malformed scans are rejected before any query runs** (11 cases: empty, short,
+long, `=` padded, illegal character, a bare uuid, the raw stored signature, a
+number, null, an object, and a well-formed payload carrying `ver=2`).
+`Buffer.from(s,"base64url")` is *lenient* - it silently skips characters it does
+not recognise - so a regex gate comes first, then a length assert, then the
+version byte. An endpoint that queries first and validates second is one where
+anyone with a camera can make it do work.
+
+**Authorisation, two layers, same shape as T29.** `/tickets` was already in
+`src/proxy.ts`'s RULES from T15, so layer 1 was wired; `getTicketsForUser`
+carries **both** `orders.user_id = $me` *and* `orders.status = 'paid'` in its
+WHERE clause, which is the layer that decides. Tested adversarially: a different
+buyer never sees the ticket, and a *pending* order yields none.
+
+**Hardening fixed while here: `src/lib/qr.ts` had no `import "server-only"`.**
+It reads `QR_SIGNING_SECRET` and imports `node:crypto`, and nothing stopped a
+client component importing it. Next would have failed somewhere downstream with
+a confusing message about a missing Node builtin; it now fails at build, naming
+the problem. The secret that makes every ticket unforgeable is the wrong thing
+to leave one careless import from a browser bundle.
+
+**UI.** Obsidian & Champagne throughout - `.glass`, `.rule-fade`, `.text-metal`,
+`formatPaise`, `tabular-nums` - laid out as a real stub with a dashed
+perforation and two punched notches filled with the page ground. **The QR sits on
+a stark white tile with a 2-module quiet zone, and that is functional, not a
+style lapse:** a scanner locates a symbol by thresholding light against dark, so
+champagne-on-black would invert the relationship the format assumes and decode
+slowly on a good camera, not at all on a cheap one. It is the one place the dark
+theme is deliberately broken and the code says so.
+
+**Motion.** A pointer-tracked 3D tilt (`perspective` + `rotateX/rotateY` through
+`useMotionValue` -> `useSpring`, so the card follows the cursor with weight
+rather than snapping), capped at a shallow 7 degrees because a steeply skewed QR
+is harder to scan; entrance staggered 90ms per card on T29's easing curve; spent
+tickets desaturate with the QR dimmed and a "Checked in" stamp, which is what
+will make T31's demo legible. Driven by `onPointerMove` and gated on
+`event.pointerType !== "mouse"`, so a touch device never gets a tilt stuck where
+the finger lifted - and all of it gated on `useReducedMotion`.
+
+**`qrcode.react` 4.2.0, not PLAN.md's `qrcode`.** Dependency surface, checked
+against the registry: `qrcode.react` has **zero** runtime dependencies;
+`react-qr-code` pulls `prop-types` + `qrcode-generator`; `qrcode` pulls `pngjs`,
+`dijkstrajs` and **`yargs`** - a command-line argument parser - into a web
+bundle. Installed `--ignore-scripts` per the T23 precedent, and it adds **zero**
+new advisories. (`npm audit`'s existing findings all pre-date this and chain
+from `shadcn`, `drizzle-kit` and `next` - T45's territory, tracked not touched.)
+
+**Verified by rendering, not assumed:** the card renders server-side without
+throwing, emits a 33x33 QR with a white ground and black modules, carries an
+accessible title naming the seat, and **does not contain the signing secret**. A
+differential check confirms the geometry is genuinely driven by the value -
+identical for the same payload, different when one character flips. Worth
+knowing: the payload string never appears as text in the DOM at all, only as
+3,691 characters of path geometry.
+
+**T29's placeholder is closed.** "Scannable QR tickets arrive in the next build
+step" is now a real link, and the success page's primary CTA points at
+`/tickets` once the order is paid (still `/dashboard` while pending - a CTA
+leading somewhere empty is worse than a modest one leading somewhere real).
+
+**HOW TO VIEW A TICKET LOCALLY.**
+
+*The real path, which also closes the authenticated-browser gap flagged since T20:*
+
+    stripe listen --forward-to localhost:3000/api/webhooks/stripe
+
+Copy the `whsec_...` it prints into `STRIPE_WEBHOOK_SECRET` if it differs, sign
+in, hold seats, Proceed to Payment, pay with `4242 4242 4242 4242` (any future
+expiry, any CVC). The webhook issues the tickets and `/tickets` shows them.
+
+*The five-second path:*
+
+    npm run demo-ticket -- owner@gmail.com
+
+Re-points one existing paid order at an account you can actually sign in as, and
+prints the command to put it back. Dev-only (refuses when `NODE_ENV=production`),
+and it touches only `orders.user_id` - `order_items` and `tickets` follow by
+foreign key and every signature stays valid, because the signature covers
+ticket/order/seat ids and none of them change.
+
+**Still not verified by me: the page in a signed-in browser.** Same limitation
+as T20/T27/T28/T29 - the seeded buyers have a `public.users` row but no Supabase
+Auth password, and a fresh signup needs an email confirmation I cannot complete.
+What *is* verified: the codec and every forgery path, both auth layers over real
+HTTP, the ownership rule against a real second user, backward compatibility with
+all pre-existing tickets, and a server-side render of the actual card.
+
+**Out of scope, by design: T31.** `POST /api/checkin`, the camera scanner and
+the VALID / ALREADY_USED / INVALID_SIGNATURE screens. `decodeTicketPayload` and
+`verifyTicketPayload` ship **now**, with the encoder and fully tested, because a
+codec whose two halves are written three tasks apart drifts.
 
 ---
 

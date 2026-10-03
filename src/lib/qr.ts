@@ -1,7 +1,17 @@
+import "server-only";
+
 import { createHmac, timingSafeEqual } from "node:crypto";
 
 /**
  * Signing for gate tickets (T30 / T31).
+ *
+ * ── `server-only` ADDED IN T30 ─────────────────────────────────────────────
+ * This module reads `QR_SIGNING_SECRET` and imports `node:crypto`, and until
+ * T30 nothing stopped a client component from importing it. Next would have
+ * failed somewhere downstream with a confusing message about a missing Node
+ * builtin; `server-only` fails immediately, at build time, naming the actual
+ * problem. The secret that makes every ticket unforgeable is exactly the wrong
+ * thing to leave one careless import away from a browser bundle.
  *
  * A QR code is just a picture of a string - anyone can photograph one, read the
  * text out of it, and generate their own. So the QR cannot simply contain a
