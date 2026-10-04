@@ -5,9 +5,20 @@
  * three RENDERED pages agree with it, which is a different claim: a page can
  * read the right function and still print the wrong number.
  *
- * For every mock event it fetches the landing page, the T18 detail page and the
- * T19 seat map, extracts the count each one actually shows, and asserts all
- * three are equal.
+ * For every mock event it fetches the T18 detail page and the T19 seat map,
+ * extracts the count each one actually shows, and asserts they agree.
+ *
+ * ── THE LANDING PAGE LEFT THIS COMPARISON IN T17 ──────────────────────────
+ * It used to be a three-way check, with the homepage card's scarcity badge as
+ * the third witness. T17 pointed the homepage at Postgres, so it no longer
+ * renders mock events at all and that third of the assertion has no subject -
+ * it would fail for the right reason, which is the worst kind of failing test.
+ *
+ * The remaining two pages still serve mock events through `event-lookup.ts`'s
+ * fallback, so what this script actually proves is unchanged in kind: a page can
+ * read the right function and still print the wrong number. Real events are
+ * covered by the T17 click-path crawl instead, which asserts every homepage card
+ * reaches a seat map that genuinely renders seats.
  *
  *   node scripts/verify-seat-sync.mjs [baseUrl]
  */
@@ -32,27 +43,6 @@ async function get(path) {
   const res = await fetch(BASE + path);
   if (!res.ok) throw new Error(`${path} -> HTTP ${res.status}`);
   return res.text();
-}
-
-/**
- * The landing card badge: read from the aria-label, because the visible digits
- * are split across elements by the flip animation and cannot be regexed.
- *
- * The card is sliced from its own href to the START OF THE NEXT CARD rather
- * than to the next `</a>`. A card containing a scarcity counter nests anchors
- * and spans deeply enough that a fixed lookahead window truncates mid-card,
- * which reads as "no card found" when the card is right there.
- */
-function landingCount(html, id) {
-  const start = html.indexOf(`href="/events/${id}"`);
-  if (start === -1) return { kind: "missing" };
-  const next = html.indexOf('href="/events/', start + 20);
-  const card = html.slice(start, next === -1 ? start + 12000 : next);
-
-  const only = /aria-label="Only (\d+) seats? left"/.exec(card);
-  if (only) return { kind: "critical", count: Number(only[1]) };
-  if (/Selling fast/.test(card)) return { kind: "warn" };
-  return { kind: "quiet" };
 }
 
 /**
@@ -101,18 +91,16 @@ const fail = (id, msg) => {
   console.log(`  FAIL  ${id} — ${msg}`);
 };
 
-console.log("event   landing         detail left  map left/total   selectable   verdict");
-console.log("─".repeat(76));
+console.log("event   detail left  map left/total   selectable   verdict");
+console.log("─".repeat(62));
 
 for (const id of IDS) {
-  const [home, detail, map] = await Promise.all([
-    get("/"),
+  const [detail, map] = await Promise.all([
     get(`/events/${id}`),
     get(`/events/${id}/seats`),
   ]);
 
   const before = failures;
-  const badge = landingCount(home, id);
   const d = detailCounts(detail);
   const m = mapCounts(map);
   const rendered = mapSeatStates(map);
@@ -125,32 +113,23 @@ for (const id of IDS) {
   // 1. detail page tiers sum to the map's whole-venue figure
   if (d.left !== m.left) fail(id, `detail sums to ${d.left}, map header says ${m.left}`);
 
-  // 2. the badge, when it shows a number, is that same figure
-  if (badge.kind === "critical" && badge.count !== m.left) {
-    fail(id, `landing badge says ${badge.count}, map says ${m.left}`);
-  }
-  if (badge.kind === "missing") fail(id, "no card found on the landing page");
-
-  // 3. the seats you can actually click equal the number advertised
+  // 2. the seats you can actually click equal the number advertised
   const clickable = rendered.available + rendered.standingAvailable;
   if (clickable !== m.left) {
     fail(id, `advertises ${m.left} available but renders ${clickable} selectable`);
   }
 
-  const badgeText =
-    badge.kind === "critical" ? `Only ${badge.count}` : badge.kind === "warn" ? "Selling fast" : "—";
-
   console.log(
-    `${id.padEnd(7)} ${badgeText.padEnd(15)} ${String(d.left).padEnd(12)} ` +
+    `${id.padEnd(7)} ${String(d.left).padEnd(12)} ` +
       `${String(m.left + "/" + m.total).padEnd(16)} ${String(clickable).padEnd(12)} ` +
       (failures === before ? "agree" : "MISMATCH"),
   );
 }
 
-console.log("─".repeat(76));
+console.log("─".repeat(62));
 console.log(
   failures === 0
-    ? `PASS — ${IDS.length} events: landing badge, pricing table and seat map all agree`
+    ? `PASS — ${IDS.length} events: pricing table and seat map agree`
     : `${failures} FAILURES`,
 );
 process.exit(failures === 0 ? 0 : 1);

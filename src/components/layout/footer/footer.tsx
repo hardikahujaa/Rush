@@ -9,36 +9,46 @@ import { Logo } from "@/components/layout/navbar/logo";
  * with us - rather than by which team owns the page. Support leads because a
  * person reading a ticketing footer is more often stuck than curious.
  *
- * TODO: these routes do not exist yet. They are deliberately real paths rather
- * than "#", so the information architecture is already correct and each page can
- * be filled in without touching this file.
+ * ── A LINK WITHOUT A PAGE IS NOT A LINK (T17) ─────────────────────────────
+ * These used to be real `href`s to routes that do not exist - ten of them -
+ * on the theory that the information architecture should be correct in advance.
+ * A dead-link crawl of the homepage found them, and in a live demo every one is
+ * a 404 a step away from the thing being demonstrated.
+ *
+ * So `href` is now optional. An entry with one is an anchor; an entry without
+ * renders as plain text, keeping the column, the heading, the label and the
+ * rhythm exactly as designed. The information architecture is still visible and
+ * still correct - it just no longer promises navigation it cannot deliver. Give
+ * one of these a page and adding its `href` back is a one-line change.
  */
-const COLUMNS: { heading: string; links: { label: string; href: string }[] }[] = [
+type FooterLink = { label: string; href?: string };
+
+const COLUMNS: { heading: string; links: FooterLink[] }[] = [
   {
     heading: "Support",
     links: [
-      { label: "Help centre", href: "/help" },
-      { label: "24/7 live chat", href: "/help/chat" },
-      { label: "FAQs", href: "/help/faq" },
+      { label: "Help centre" },
+      { label: "24/7 live chat" },
+      { label: "FAQs" },
       { label: "Track an order", href: "/dashboard" },
     ],
   },
   {
     heading: "Legal",
     links: [
-      { label: "Terms & conditions", href: "/legal/terms" },
-      { label: "Privacy policy", href: "/legal/privacy" },
-      { label: "Refund & cancellation", href: "/legal/refunds" },
-      { label: "Accessibility", href: "/legal/accessibility" },
+      { label: "Terms & conditions" },
+      { label: "Privacy policy" },
+      { label: "Refund & cancellation" },
+      { label: "Accessibility" },
     ],
   },
   {
     heading: "Business",
     links: [
       { label: "List your event", href: "/organizer" },
-      { label: "Become a partner", href: "/business/partners" },
-      { label: "Corporate enquiries", href: "/business/corporate" },
-      { label: "Press kit", href: "/business/press" },
+      { label: "Browse all events", href: "/events" },
+      { label: "Corporate enquiries" },
+      { label: "Press kit" },
     ],
   },
 ];
@@ -69,13 +79,26 @@ export function Footer() {
                 </h2>
                 <ul className="mt-4 space-y-2.5">
                   {col.links.map((l) => (
-                    <li key={l.href}>
-                      <Link
-                        href={l.href}
-                        className="inline-block py-0.5 text-sm text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:text-foreground focus-visible:underline"
-                      >
-                        {l.label}
-                      </Link>
+                    <li key={l.label}>
+                      {l.href ? (
+                        <Link
+                          href={l.href}
+                          className="inline-block py-0.5 text-sm text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:text-foreground focus-visible:underline"
+                        >
+                          {l.label}
+                        </Link>
+                      ) : (
+                        /* Dimmer than a real link and NOT focusable, so keyboard
+                           and screen-reader users are not walked through four
+                           items that go nowhere. `title` says why on hover for
+                           anyone who tries to click it. */
+                        <span
+                          title="Coming soon"
+                          className="inline-block cursor-default py-0.5 text-sm text-muted-foreground/45"
+                        >
+                          {l.label}
+                        </span>
+                      )}
                     </li>
                   ))}
                 </ul>

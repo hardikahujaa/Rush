@@ -1,96 +1,109 @@
+import Link from "next/link";
+import { CalendarClock } from "lucide-react";
+
 import { Footer } from "@/components/layout/footer/footer";
 import { EventRail } from "@/components/home/event-rail";
 import { Hero } from "@/components/home/hero";
-import { QuickFilters } from "@/components/home/quick-filters";
-import { Upcoming } from "@/components/home/upcoming";
-import { getLiveEvents } from "@/db/queries/events";
-import {
-  RECOMMENDED,
-  SELLING_FAST,
-  SPOTLIGHT_COMEDY,
-  SPOTLIGHT_MOVIES,
-} from "@/lib/mock-events";
+import { getEventCards } from "@/db/queries/events";
 
 /**
  * Homepage — the VIP Lobby.
  *
- * Scroll order is a funnel: what is about to be gone, what suits you, what you
- * might not have considered, what has not opened yet. Urgency leads because it
- * is the only section with a deadline attached.
+ * ── EVERY EVENT ON THIS PAGE IS REAL (T17) ─────────────────────────────────
+ * Until T17 all five rails rendered `src/lib/mock-events.ts`. A crawl of the
+ * rendered page found **18 dead links** and 18 event pages whose seat maps could
+ * never be held or bought, because mock seat ids like `rc-3-front-A3` exist
+ * nowhere in Postgres and `resolveSeatMap` correctly refuses to let them be
+ * held. In a demo every one of those reads as a bug.
  *
- * ── "LIVE NOW" IS REAL; THE RAILS BELOW IT ARE NOT ────────────────────────
- * The first rail reads genuine rows from Postgres via `getLiveEvents()`. Every
- * rail beneath it still renders MOCK data from src/lib/mock-events.ts, whose
- * seat ids exist nowhere in the database - so those listings deliberately
- * cannot be held or bought, and the seat map says so.
+ * Now there are two rails and both come from the `events` table, so every card
+ * links to a uuid with a working seat map behind it.
  *
- * That distinction was previously invisible, and it was the whole bug: with 18
- * mock events linked from here and 0 real ones, there was no route through the
- * UI to an event anyone could actually buy. "Live now" is the route.
+ * ── WHY TWO RAILS AND NOT FIVE ─────────────────────────────────────────────
+ * The old "Recommended for you" and two "Spotlight" rails were category slices,
+ * and `events` has no category column. Keeping them would have meant either
+ * inventing categories or showing the same rows four times under four headings.
+ * On sale / next drops is the one split the data genuinely supports, and it is
+ * the split that matters: what you can buy now, and what to come back for.
  *
- * Every component still takes its data as props, so finishing T17 means
- * swapping the sources, not the shapes.
+ * The category chip rail that used to sit under the hero went with them - all
+ * six of its links were 404s.
+ *
+ * ── WHY THIS IS NOW `async` ────────────────────────────────────────────────
+ * A Server Component may await data directly. There is no `/api/events` route,
+ * no `useEffect`, no loading state threaded through props: the query runs on the
+ * server during render and only HTML reaches the browser. That is the difference
+ * from plain React, where this component would have to render empty first, fetch
+ * on mount, then re-render - three paint states and a client-side round trip for
+ * data the server already had.
  */
 export default async function HomePage() {
-  const liveEvents = await getLiveEvents();
+  /* Fetched concurrently rather than in sequence - they are independent, and
+     awaiting them one after the other would add their latencies together. */
+  const [onSale, upcoming] = await Promise.all([
+    getEventCards({ bucket: "on-sale", limit: 8 }),
+    getEventCards({ bucket: "upcoming", limit: 8 }),
+  ]);
+
+  const nothingAtAll = onSale.length === 0 && upcoming.length === 0;
 
   return (
     <>
       <Hero />
 
-      <QuickFilters />
-
-      {/* Rendered only when there is something genuinely on sale - an empty
-          "Live now" rail would be worse than none, and it is the honest state
-          when no event has dropped yet. */}
-      {liveEvents.length > 0 && (
+      {/* Each rail renders only when it has rows. A headed rail with nothing
+          under it looks like a failed fetch, which is precisely the impression
+          T17 exists to remove. */}
+      {onSale.length > 0 && (
         <EventRail
-          id="live-now"
-          eyebrow="Live now"
-          title="On sale this minute"
-          description="Real events, real inventory. These are the ones you can hold and pay for — seat counts come straight from the availability query."
-          events={liveEvents}
+          id="on-sale"
+          eyebrow="On sale now"
+          title="Pick your seats tonight"
+          description="Live inventory. Seat counts are the output of the availability query — sold seats and seats in someone else's checkout are already excluded, so the number is real."
+          events={onSale}
           accentHue={82}
         />
       )}
 
-      <EventRail
-        id="selling-fast"
-        eyebrow="Selling fast"
-        title="Going in minutes, not days"
-        description="Seat counts are the live output of the availability query — held and sold seats are already excluded, so the number is real."
-        events={SELLING_FAST}
-        accentHue={75}
-      />
+      {upcoming.length > 0 && (
+        <EventRail
+          id="next-drops"
+          eyebrow="Next drops"
+          title="Set your alarm"
+          description="Tickets for these have not been released yet. The countdown on each event page is the one that matters."
+          events={upcoming}
+          accentHue={62}
+        />
+      )}
 
-      <EventRail
-        id="recommended"
-        eyebrow="Recommended for you"
-        title="Near you in Chennai"
-        description="Based on your selected city. Change it from the navbar to see another."
-        events={RECOMMENDED}
-        accentHue={88}
-      />
-
-      <EventRail
-        id="spotlight-comedy"
-        eyebrow="Spotlight"
-        title="Best of comedy"
-        href="/events?category=comedy-theater"
-        events={SPOTLIGHT_COMEDY}
-        accentHue={62}
-      />
-
-      <EventRail
-        id="spotlight-movies"
-        eyebrow="Spotlight"
-        title="Top movies this week"
-        href="/events?category=movies"
-        events={SPOTLIGHT_MOVIES}
-        accentHue={55}
-      />
-
-      <Upcoming />
+      {/*
+        The all-empty state. Unreachable with the seeded catalogue, but a
+        homepage that renders the hero and then simply stops would read as a
+        broken page rather than an empty one.
+      */}
+      {nothingAtAll && (
+        <section className="mx-auto max-w-2xl px-4 py-20 text-center sm:px-6">
+          <div className="glass rounded-2xl px-6 py-14">
+            <CalendarClock
+              className="mx-auto size-7 text-muted-foreground"
+              aria-hidden="true"
+            />
+            <p className="mt-4 text-sm text-foreground">
+              No events are published yet
+            </p>
+            <p className="mx-auto mt-2 max-w-sm text-pretty text-xs leading-relaxed text-muted-foreground">
+              Nothing is on sale and nothing is scheduled to drop. When an
+              organizer publishes a show it appears here immediately.
+            </p>
+            <Link
+              href="/events"
+              className="btn-gold-outline mt-6 inline-flex h-11 items-center rounded-xl px-5 text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              Browse everything
+            </Link>
+          </div>
+        </section>
+      )}
 
       <Footer />
     </>

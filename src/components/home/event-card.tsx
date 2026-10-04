@@ -28,6 +28,15 @@ export type EventCardData = {
   fromPriceCents: number;
   seatsLeft: number;
   seatsTotal: number;
+  /**
+   * Where this event is in its lifecycle, derived in `getEventCards` from
+   * `status` + `drop_at` + `starts_at` together - the same composite test
+   * `createHold` applies. It drives two things a card cannot fake: the status
+   * badge, and WHERE the card links (see the note on the Link below).
+   */
+  state?: "on-sale" | "upcoming" | "past";
+  /** ISO string. Only meaningful while `state === "upcoming"`. */
+  dropAt?: string;
 };
 import { cn } from "@/lib/utils";
 
@@ -42,6 +51,25 @@ function formatWhen(iso: string) {
     hour12: true,
     timeZone: "Asia/Kolkata",
   }).format(new Date(iso));
+}
+
+/**
+ * "Drops in 3d" / "Drops in 5h" - coarse on purpose.
+ *
+ * Rendered on the SERVER, so it is a static string by the time it reaches the
+ * browser and cannot cause a hydration mismatch. Deliberately granular to the
+ * day or hour rather than the second: a live-ticking countdown belongs on the
+ * detail page (T18 already has one, as a client component with a stable server
+ * snapshot), and a card in a scrolling rail re-rendering every second would be
+ * waste for no gain.
+ */
+function dropsIn(iso: string): string {
+  const ms = new Date(iso).getTime() - Date.now();
+  if (ms <= 0) return "On sale";
+  const hours = Math.round(ms / 3_600_000);
+  if (hours < 1) return "Drops in minutes";
+  if (hours < 24) return `Drops in ${hours}h`;
+  return `Drops in ${Math.round(hours / 24)}d`;
 }
 
 /**
@@ -77,9 +105,33 @@ export function EventCard({
   const scarcity = urgency(event.seatsLeft, event.seatsTotal);
   const [h1, h2] = event.hues;
 
+  /**
+   * WHERE A CARD GOES, AND WHY IT DEPENDS ON THE STATE.
+   *
+   * T17's directive asks every card to link straight to `/events/[id]/seats`,
+   * and for an on-sale event that is exactly right - one click from the
+   * homepage to an interactive map.
+   *
+   * It is wrong for an event that has not dropped. The seat map would render,
+   * every seat would look pickable, and `createHold` would then refuse the
+   * whole selection with `EVENT_NOT_ON_SALE` - a button that fails after the
+   * user has done the work. That is the same class of dead end T17 exists to
+   * remove, so an upcoming event goes to its detail page instead, where the
+   * drop countdown lives and the CTA tells the truth.
+   *
+   * A past event also goes to the detail page: its map is entirely sold.
+   *
+   * `state` is optional on the type, so anything still passing plain card data
+   * keeps the old detail-page behaviour rather than silently changing.
+   */
+  const href =
+    event.state === "on-sale"
+      ? `/events/${event.id}/seats`
+      : `/events/${event.id}`;
+
   return (
     <Link
-      href={`/events/${event.id}`}
+      href={href}
       className={cn(
         "group/card relative flex flex-col overflow-hidden rounded-2xl outline-none transition-all duration-300",
         // live-pulse paints the travelling gold sliver on ::before. The card is
@@ -114,15 +166,40 @@ export function EventCard({
           }}
         />
 
+        {/* The city, which real rows always have, where the mock category chip
+            used to sit. `events` has no category column and T17 removed the
+            taxonomy rather than invent one. */}
         <span className="absolute left-3 top-3 rounded-full bg-black/60 px-2.5 py-1 text-[10px] font-medium uppercase tracking-wider text-foreground/90 backdrop-blur-md">
-          {event.category}
+          {event.category ?? event.city}
         </span>
 
-        {event.tag === "just-announced" && (
+        {/*
+          THE STATUS BADGE, from real lifecycle state.
+
+          T17's brief asks for one, and this is the honest version: `state` is
+          derived in `getEventCards` from `status` + `drop_at` + `starts_at`
+          together, so "On sale" means the hold API will actually serve this
+          event. It also tells the user which of two destinations the card is
+          about to take them to - the seat map, or the countdown.
+        */}
+        {event.state === "on-sale" ? (
+          <span className="absolute right-3 top-3 inline-flex items-center gap-1.5 rounded-full border border-live/40 bg-black/65 px-2.5 py-1 text-[10px] font-medium uppercase tracking-wider text-live backdrop-blur-md">
+            <span aria-hidden="true" className="size-1.5 rounded-full bg-live" />
+            On sale
+          </span>
+        ) : event.state === "upcoming" ? (
+          <span className="absolute right-3 top-3 rounded-full border border-gold/35 bg-black/65 px-2.5 py-1 text-[10px] font-medium uppercase tracking-wider text-gold-champagne backdrop-blur-md">
+            {event.dropAt ? dropsIn(event.dropAt) : "Upcoming"}
+          </span>
+        ) : event.state === "past" ? (
+          <span className="absolute right-3 top-3 rounded-full border border-white/15 bg-black/65 px-2.5 py-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground backdrop-blur-md">
+            Ended
+          </span>
+        ) : event.tag === "just-announced" ? (
           <span className="absolute right-3 top-3 rounded-full border border-gold/30 bg-black/60 px-2.5 py-1 text-[10px] font-medium uppercase tracking-wider text-gold-champagne backdrop-blur-md">
             Just announced
           </span>
-        )}
+        ) : null}
 
         <div className="absolute inset-x-0 bottom-0 p-4">
           <h3 className="text-balance text-lg font-semibold leading-tight tracking-[-0.02em] text-foreground">

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { LogOut, Menu } from "lucide-react";
+import { CalendarClock, LogOut, Menu, Ticket, Zap } from "lucide-react";
 
 import { signOut } from "@/app/(auth)/actions";
 import { Button } from "@/components/ui/button";
@@ -14,7 +14,7 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@/components/ui/sheet";
-import { CATEGORIES, CITIES } from "@/lib/taxonomy";
+import { CITIES } from "@/lib/taxonomy";
 import type { NavUser } from "@/components/layout/navbar/user-nav";
 
 /**
@@ -56,25 +56,42 @@ export function MobileMenu({ user }: { user: NavUser | null }) {
             Browse
           </p>
         </div>
+        {/*
+          T17 replaced six category links with one real destination.
+
+          This used to map `CATEGORIES` to `/events?category=<slug>`, and all six
+          were 404s - `events` has no category column, so the filter could never
+          have worked. `/events` filters by status instead, which the data
+          genuinely supports.
+        */}
         <nav className="flex flex-col px-3">
-          {CATEGORIES.map((cat) => {
-            const Icon = cat.icon;
-            return (
-              <Link
-                key={cat.slug}
-                href={`/events?category=${cat.slug}`}
-                onClick={close}
-                className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-[15px] text-foreground/90 transition-colors hover:bg-white/5"
-              >
-                <Icon
-                  className="size-4 shrink-0"
-                  style={{ color: `oklch(0.85 0.13 ${cat.hue})` }}
-                  aria-hidden="true"
-                />
-                {cat.label}
-              </Link>
-            );
-          })}
+          <Link
+            href="/events"
+            onClick={close}
+            className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-[15px] text-foreground/90 transition-colors hover:bg-white/5"
+          >
+            <Ticket className="size-4 shrink-0 text-gold" aria-hidden="true" />
+            All events
+          </Link>
+          <Link
+            href="/events?status=on-sale"
+            onClick={close}
+            className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-[15px] text-foreground/90 transition-colors hover:bg-white/5"
+          >
+            <Zap className="size-4 shrink-0 text-live" aria-hidden="true" />
+            On sale now
+          </Link>
+          <Link
+            href="/events?status=upcoming"
+            onClick={close}
+            className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-[15px] text-foreground/90 transition-colors hover:bg-white/5"
+          >
+            <CalendarClock
+              className="size-4 shrink-0 text-gold-champagne"
+              aria-hidden="true"
+            />
+            Next drops
+          </Link>
         </nav>
 
         <Separator className="my-4 bg-white/10" />

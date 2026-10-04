@@ -163,17 +163,24 @@ export async function getEventById(id: string): Promise<EventDetail | null> {
   };
 }
 
-/* ── the real events rail (pre-T31 unblock) ─────────────────────────────── */
+/* ── event cards: the homepage rails and the /events listing (T17) ───────── */
 
-export type LiveEventCard = {
+/** Which slice of the catalogue to return. */
+export type EventBucket = "on-sale" | "upcoming" | "past" | "all";
+
+export type EventCardRow = {
   id: string;
   title: string;
   subtitle: string | null;
   category: string | null;
   venue: string;
   city: string;
-  /** ISO string, so it matches what the card already formats. */
+  /** ISO string, matching what the card already formats. */
   startsAt: string;
+  /** ISO string. Drives the "drops in" countdown on an upcoming card. */
+  dropAt: string;
+  /** Derived, not the raw column - see `bucketOf` below. */
+  state: "on-sale" | "upcoming" | "past";
   hues: [number, number];
   fromPriceCents: number;
   seatsLeft: number;
@@ -181,79 +188,116 @@ export type LiveEventCard = {
 };
 
 /**
- * Real, buyable events for the homepage.
+ * Real, clickable events for the homepage rails and the `/events` listing.
  *
- * ── WHY THIS EXISTS, AND WHY IT IS THE ACTUAL BUG FIX ──────────────────────
- * Every rail on `/` rendered `src/lib/mock-events.ts`, whose seat ids are
- * strings like `rc-3-front-A3` that exist nowhere in Postgres. `resolveSeatMap`
- * correctly reports `canHold: false` for those, so the Hold button is disabled
- * by design - which means **there was no path through the UI to an event that
- * could actually be bought.** Measured before this change: 18 mock events
- * linked from the homepage, 0 real ones. Every reported symptom downstream of
- * that (dead button, "blank" map, past dates) was a consequence of landing on a
- * demo listing.
+ * ── THIS REPLACED THE MOCK CATALOGUE (T17) ─────────────────────────────────
+ * Until T17 every rail on the homepage rendered `src/lib/mock-events.ts`, whose
+ * seat ids are strings like `rc-3-front-A3` that exist nowhere in Postgres. A
+ * crawl of the rendered homepage found 18 dead links and 18 event pages whose
+ * seat maps could never be held or bought. Everything here comes from the
+ * `events` table, so every card links to a uuid with a real seat map behind it.
  *
- * This is the slice of the skipped T17 that unblocks the flow: one query, real
- * rows, shaped exactly like what the existing card renders.
+ * ── THE BUCKET IS DERIVED, NOT READ OFF `status` ───────────────────────────
+ * `events.status` alone cannot answer "can I buy this right now": a row can be
+ * `live` with `drop_at` still in the future (tickets not released) or with
+ * `starts_at` in the past (the show has happened). The three states below are
+ * computed from all three columns together, which is the same composite test
+ * `createHold` applies before it will claim a seat - so a card that says "on
+ * sale" is a card the hold API will actually serve.
  *
- * Availability comes from `seatIsAvailable` - the same predicate the hold
- * transaction decides with - so the "only N seats left" badge cannot promise a
- * seat the API would refuse. Expired holds free their seats here with no cron
- * job, exactly as in T22.
+ * ── AVAILABILITY COMES FROM THE SOURCE OF TRUTH ────────────────────────────
+ * `seatsLeft` uses `seatIsAvailable` - order lines and live unexpired holds -
+ * never `seats.status`. That is what makes the scarcity badge honest and what
+ * makes expired holds free their seats here with no cron job (T22).
  */
-export async function getLiveEvents(limit = 8): Promise<LiveEventCard[]> {
+export async function getEventCards({
+  bucket = "all",
+  q,
+  limit = 24,
+}: {
+  bucket?: EventBucket;
+  /** Free-text title search. Powers the navbar's existing `?q=` search. */
+  q?: string;
+  limit?: number;
+} = {}): Promise<EventCardRow[]> {
+  /* Composed as fragments rather than string-concatenated SQL, so the values
+     stay parameterised and the filter cannot be injected into. */
+  const bucketFilter =
+    bucket === "on-sale"
+      ? sql`and e.status = 'live' and e.drop_at <= now() and e.starts_at > now()`
+      : bucket === "upcoming"
+        ? sql`and e.drop_at > now() and e.starts_at > now()`
+        : bucket === "past"
+          ? sql`and e.starts_at <= now()`
+          : sql``;
+
+  /* `%` wrapping happens in the parameter, not the SQL, so a user typing `%`
+     searches for a literal percent sign instead of matching everything. */
+  const search = q?.trim()
+    ? sql`and (e.title ilike ${`%${q.trim()}%`} or v.name ilike ${`%${q.trim()}%`} or v.city ilike ${`%${q.trim()}%`})`
+    : sql``;
+
   const rows = await db.execute<{
     id: string;
     title: string;
     description: string | null;
     /* NOT `Date`. A raw `execute` bypasses Drizzle's column mapping, so a
-       timestamptz arrives in whatever shape postgres.js hands back - a string -
-       while a typed `.select()` would have been mapped to a Date. Annotating it
-       as Date compiles happily and then throws
-       `row.starts_at.toISOString is not a function` at runtime, which is
-       exactly what it did on the first run of this query. The same footgun is
-       already documented in db/queries/holds.ts step 8. */
+       timestamptz arrives as a string - annotating it as Date compiles and then
+       throws `.toISOString is not a function` at runtime. That exact bug shipped
+       in this file once already; see also holds.ts step 8. */
     starts_at: string | Date;
+    drop_at: string | Date;
     venue: string;
     city: string;
     from_price_cents: number | null;
     seats_total: number;
     seats_left: number;
+    dropped: boolean;
+    started: boolean;
   }>(sql`
     select
       e.id,
       e.title,
       e.description,
       e.starts_at,
+      e.drop_at,
       v.name as venue,
       v.city,
+      e.drop_at   <= now() as dropped,
+      e.starts_at <= now() as started,
       (select min(s.price_cents) from sections s where s.event_id = e.id) as from_price_cents,
       (select count(*)::int from seats st where st.event_id = e.id) as seats_total,
       (select count(*)::int from seats st
          where st.event_id = e.id and ${seatIsAvailable(sql`st.id`)}) as seats_left
     from ${events} e
     join ${venues} v on v.id = e.venue_id
-    where e.status = 'live'
-      and e.drop_at <= now()
-    order by e.starts_at asc
+    where e.status <> 'draft'
+      ${bucketFilter}
+      ${search}
+    order by
+      /* Soonest first within each group, but anything already finished sinks to
+         the bottom - a past show should never head a listing. */
+      (e.starts_at <= now()) asc,
+      e.starts_at asc
     limit ${limit}
   `);
 
   return rows
-    /* A room with no seats cannot be rendered as a card - the urgency badge
-       divides by seatsTotal, and a "0 of 0 left" chip is noise. */
+    /* A room with no seats cannot be rendered as a card: the urgency badge
+       divides by seatsTotal and a "0 of 0 left" chip is noise. */
     .filter((row) => row.seats_total > 0)
     .map((row) => ({
       id: row.id,
       title: row.title,
-      /* The events table has no subtitle column, and inventing one would be the
-         kind of small lie this project has refused since event-lookup.ts. The
-         card simply omits the line when it is null. */
+      /* No subtitle column, and inventing one would be the kind of small lie
+         event-lookup.ts has refused since T18. The card omits the line. */
       subtitle: null,
-      category: "On sale now",
+      category: null,
       venue: row.venue,
       city: row.city,
       startsAt: new Date(row.starts_at).toISOString(),
+      dropAt: new Date(row.drop_at).toISOString(),
+      state: row.started ? "past" : row.dropped ? "on-sale" : "upcoming",
       hues: huesFromId(row.id),
       fromPriceCents: Number(row.from_price_cents ?? 0),
       seatsTotal: row.seats_total,

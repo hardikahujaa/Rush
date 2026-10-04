@@ -293,13 +293,125 @@ SUPABASE_SERVICE_ROLE_KEY="eyJ..."
 
 ## PHASE 4 — Public pages
 
-### ☐ T17 🟡 — Events listing page
+### ☑ T17 🟡 — Events listing page
 
 **Prompt:**
 
 > Build `/events` as a server component that queries all events with their venue and a computed count of available seats. Render them as animated cards showing poster, title, venue, date, price range, and a status badge. Add a loading.tsx skeleton. Explain how server components fetch data without an API route, and why that's different from what I'd do with plain React.
 
 **Commit:** `feat: events listing`
+
+**Done — and scoped wider than the brief, because the brief's page was only half
+the problem.** T17 asks for `/events`. The homepage was still rendering
+`src/lib/mock-events.ts`, so the task actually in the way of a faculty demo was
+*both*: build the listing, and take the homepage off mock data.
+
+**THE MEASUREMENT THAT DEFINED THE WORK.** A crawl of the rendered homepage,
+before anything changed:
+
+    curl -s localhost:3000/ | grep -o 'href="/[^"]*"' | sort -u
+      -> 18 dead 404s, and 18 mock event pages whose seat maps
+         can never be held (canHold: false, mock seat ids like
+         `rc-3-front-A3` exist nowhere in Postgres)
+
+| dead links | count | source |
+|---|---|---|
+| `/events` | 1 | hero CTA, every rail's "View all", `not-found` |
+| `/events?category=…` | 6 | homepage chips **+ navbar mega-menu + mobile menu** |
+| `/legal/*` `/help/*` `/business/*` | 10 | footer |
+
+After: **zero.** 22 × 200 and 3 × 307 (the correct auth redirects on
+`/dashboard`, `/tickets`, `/organizer`) across `/`, `/events` and every filter.
+
+**`npm run seed-events` — a real catalogue, added without destroying one.**
+The database had 3 events at 1 venue, one of them already ended: a real-data
+homepage of **two** near-identical cards, both Chennai, both from Rs 999. No
+layout work makes that read as a catalogue. `db:seed` would have fixed it and
+deleted every order and ticket in the process, so this script only ever INSERTs
+— the same posture as `fix-dates`. It added 3 venues (Mumbai, Bengaluru,
+Delhi NCR) and 8 events, 4 on sale and 4 upcoming, prices now spanning
+Rs 380–Rs 1,798. Every structural constant (`TIERS`, `ROWS`, `SEATS_PER_ROW`) is
+copied from `seed.ts` so each new seat map is identical in shape to the one
+T19–T30 were verified against, and the pre-sold seats are created through **real
+orders and order_items**, never by setting `seats.status = 'sold'` alone — which
+would have left T22's availability query reporting them free and T36's dashboard
+reporting zero revenue. Idempotent: a second run skips all 8 by title.
+`users` unchanged, 44 → 44.
+
+**Deviations from the directive, each deliberate:**
+
+1. **Cards do not all link to `/events/[id]/seats`.** The directive says every
+   card should. An **on-sale** card does. An **upcoming** card goes to its detail
+   page instead, because the seat map for an undropped event renders every seat
+   as pickable and `createHold` then refuses the entire selection with
+   `EVENT_NOT_ON_SALE` — a button that fails *after* the user has done the work.
+   That is the same class of dead end this task exists to remove. The destination
+   is derived from `state`, which the status badge also displays, so the card
+   tells you where it is about to take you.
+
+2. **Two rails, not five.** "Recommended for you" and the two "Spotlight" rails
+   were category slices and `events` has no category column — keeping them meant
+   inventing categories or showing the same rows four times under four headings.
+   On sale / next drops is the one split the data genuinely supports.
+
+3. **The category taxonomy was removed from the NAVBAR too,** not just the
+   homepage. `CategoriesMenu` is on every page in the app, so cleaning only the
+   homepage would have left six dead links everywhere else. `quick-filters.tsx`
+   and `categories-menu.tsx` are deleted; `taxonomy.ts` keeps only `CITIES`
+   (the location selector navigates nowhere, and the catalogue now spans four
+   cities for real). The mobile menu's six category links became three real
+   ones: All events / On sale now / Next drops.
+
+4. **`/events` filters by status, and search now works.** Status is derived from
+   `status` + `drop_at` + `starts_at` together — the same composite test
+   `createHold` applies — so "On sale" means the hold API will actually serve it.
+   And `?q=` is honoured because the navbar's search box has **always** pushed to
+   `/events?q=…`; until this page existed that was a 404 as well. It searches
+   title, venue and city, with `%` wrapped in the *parameter* so a user typing a
+   literal `%` searches for one instead of matching everything.
+
+5. **The footer keeps its design and loses its 404s.** Ten unbuilt destinations
+   now render as dimmed, **non-focusable** text rather than anchors — same words,
+   same three columns, same rhythm, nothing to 404 into, and keyboard users are
+   not walked through four items that go nowhere. `href` became optional on the
+   type, so giving one of them a page later is a one-line change.
+
+**`scripts/verify-seat-sync.mjs` lost a third of its subject and was updated, not
+deleted.** It asserted that the landing page, detail page and seat map agree on
+each mock event's count. The homepage no longer renders mock events, so that
+third would now fail *for the right reason* — the worst kind of failing test. It
+is a two-page check (detail + seat map, still served by `event-lookup`'s mock
+fallback) with the reason recorded in the header. Real events are covered by the
+click-path crawl instead. `verify-seat-math.ts` is untouched and still passes;
+`mock-data.ts` stays because the **real** seat map borrows its types and tier
+colours via `src/db/queries/seats.ts`.
+
+Also fixed in passing: `check-seed.mjs` hardcoded `count(*)/3` for "seats per
+event" and reported **1056** once the catalogue reached 11 events. Now divided by
+the actual event count.
+
+**Verified end to end, not asserted:**
+
+    homepage        10 real uuid cards, 0 mock links, 4 cities,
+                    5 "On sale" + 5 "Drops in Nd" badges
+    click-path      5 on-sale cards -> /seats -> 200 with 288 seat
+                    buttons each, canHold: true, 162-245 available
+                    5 upcoming cards -> detail -> 200
+    /events         11 listed; on-sale filter -> 5; q=aurora -> 1
+    dead links      0 of 25 internal links 404 (was 18)
+
+**One thing a curl cannot see, stated rather than glossed:** the upcoming detail
+pages render an empty fixed-height slot server-side, because T18's countdown is a
+client component with a stable server snapshot — deliberately so, to avoid a
+hydration mismatch on a ticking clock. The digits appear on hydration, in a real
+browser, which I cannot drive here. (Two of the five *appeared* to show countdown
+text to my grep; that was their seeded descriptions containing the words
+"tickets release", not the CTA.)
+
+**Full regression:** hold 20 / expiry 18 / release 18 / checkout 24 / webhook 50 /
+success 18 / ticket 36, the T21 race test (1 winner, 49 conflicts, 0 errors),
+`verify-seat-math` 14/14, the updated `verify-seat-sync` 14/14, and
+`check-seed.mjs` clean across **3,168 seats and 11 events — zero oversells.**
 
 ---
 
@@ -1558,7 +1670,7 @@ Grab a domain (free with the GitHub Student Pack) and point it at Vercel.
 | 1 · Foundation | T03–T07 | ☐ |
 | 2 · Database | T08–T12 | ☐ |
 | 3 · Auth | T13–T16 | ☐ |
-| 4 · Public pages | T17–T18 | ☐ |
+| 4 · Public pages | T17–T18 | ☑ |
 | 5 · **Booking engine** | T19–T25 | ☐ |
 | 6 · Payments | T26–T29 | ☑ |
 | 7 · Tickets & check-in | T30–T32 | ☐ |

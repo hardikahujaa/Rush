@@ -12,7 +12,10 @@ await q("venues", sql`select count(*)::int from venues`);
 await q("events", sql`select count(*)::int from events`);
 await q("sections", sql`select count(*)::int from sections`);
 await q("seats", sql`select count(*)::int from seats`);
-await q("seats per event", sql`select (count(*)/3)::int from seats`);
+// Divided by the ACTUAL event count, not a hardcoded 3. T17 took the catalogue
+// from 3 events to 11, and the old literal then reported 1056 seats per event.
+await q("seats per event", sql`
+  select (count(*) / greatest((select count(*) from events), 1))::int from seats`);
 await q("orders", sql`select count(*)::int from orders`);
 await q("order_items", sql`select count(*)::int from order_items`);
 await q("tickets", sql`select count(*)::int from tickets`);

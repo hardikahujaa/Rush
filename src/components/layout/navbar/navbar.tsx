@@ -1,5 +1,4 @@
 import { CartButton } from "@/components/layout/navbar/cart-button";
-import { CategoriesMenu } from "@/components/layout/navbar/categories-menu";
 import { GlobalSearch } from "@/components/layout/navbar/global-search";
 import { LocationSelector } from "@/components/layout/navbar/location-selector";
 import { Logo } from "@/components/layout/navbar/logo";
@@ -39,7 +38,6 @@ export async function Navbar() {
       </div>
 
       <div className="flex shrink-0 items-center gap-1">
-        <CategoriesMenu />
         <CartButton />
         <UserNav user={navUser} />
         <MobileMenu user={navUser} />
