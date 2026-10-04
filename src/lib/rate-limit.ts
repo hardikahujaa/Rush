@@ -9,6 +9,8 @@ import {
   isRedisConfigured,
   RELEASE_RATE_LIMIT,
   releaseRateLimiter,
+  SCAN_RATE_LIMIT,
+  scanRateLimiter,
 } from "@/lib/redis";
 
 export type RateLimitVerdict = {
@@ -182,6 +184,17 @@ export function limitReleases(identifier: string): Promise<RateLimitVerdict> {
  */
 export function limitCheckout(identifier: string): Promise<RateLimitVerdict> {
   return limit(checkoutRateLimiter, "checkout", identifier, CHECKOUT_RATE_LIMIT);
+}
+
+/**
+ * Scanning a ticket at the gate: 30 per 10s, its own budget.
+ *
+ * Deliberately the most generous bucket in the app - see the note on
+ * SCAN_RATE_LIMIT. Separate from the others so a busy door can never exhaust
+ * the budget that protects seat selection, and vice versa.
+ */
+export function limitScans(identifier: string): Promise<RateLimitVerdict> {
+  return limit(scanRateLimiter, "scan", identifier, SCAN_RATE_LIMIT);
 }
 
 /** Reported in the startup warning and by the test script. */

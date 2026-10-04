@@ -1423,7 +1423,7 @@ oversells), `verify-seat-math` (14 events, all invariants hold), and
 
 ---
 
-### ☐ T31 🔴 — Gate scanner
+### ☑ T31 🔴 — Gate scanner
 
 **Prompt:**
 
@@ -1431,6 +1431,147 @@ oversells), `verify-seat-math` (14 events, all invariants hold), and
 
 **Verify:** scanning the same ticket twice gives VALID then ALREADY_USED.
 **Commit:** `feat: gate check-in scanner`
+
+**Done.** `src/db/queries/checkin.ts` holds the decision,
+`src/app/api/scan/route.ts` is the endpoint,
+`src/components/scan/gate-scanner.tsx` is the bouncer UI.
+`npm run scan-test` — **31 checks**.
+
+**THE WHOLE TASK IS ONE SQL STATEMENT.** The camera is the visible part and the
+easy part. What actually decides whether two people get into one seat is this:
+
+    update tickets set checked_in_at = now()
+     where id = $1 and checked_in_at is null
+     returning checked_in_at
+
+A compare-and-set. There is no read to race against. A concurrent identical
+statement blocks on the row lock, re-evaluates its own WHERE against the
+committed value once the lock releases, matches nothing, and returns zero rows.
+**Exactly one caller can ever get a row back**, so "zero rows" *means*
+already-scanned rather than merely suggesting it. The `row.checkedInAt` fetched
+a few milliseconds earlier is deliberately never consulted for the decision —
+only for the display and the signature check.
+
+    5. 20 simultaneous scans of ONE unscanned ticket
+       20 concurrent scans in 952 ms
+       outcomes: {"valid":1,"already_scanned":19}
+       DB VERIFICATION: exactly one checked_in_at, non-null
+
+**NEGATIVE CONTROL — and it is worse than "the test fails".** Swapping the
+compare-and-set for the textbook read-then-write and changing nothing else:
+
+    outcomes: {"valid":20}
+    FAIL  EXACTLY ONE said valid — 20 admitted — 19 people walked in free
+
+**Twenty green screens for one ticket.** But look at the line underneath it:
+
+    PASS  DB VERIFICATION: exactly one checked_in_at, non-null
+
+`checked_in_at` is a single column, so the last writer wins and the table ends up
+holding **exactly one** plausible timestamp. The database looks perfect
+afterwards. Nineteen people got in free and the audit trail shows a single,
+ordinary check-in — there is no row anywhere that records the loss. That is what
+makes this class of bug worth a whole task: it does not leave evidence.
+
+Deviations from the brief, each deliberate:
+
+1. **`/api/scan` is authenticated. The brief offered "or keep it accessible for
+   the demo" and that was declined.** This route WRITES `checked_in_at`. An open
+   version lets anyone who can reach the URL **burn** tickets — not steal a seat,
+   but mark a paying customer's ticket used so they are refused at the door with
+   no way to prove otherwise. Denial of entry is a worse outcome than most of
+   what this codebase defends against, and preventing it is one role check.
+   Authorisation is **three** layers: the proxy matcher (since T15), `requireRole`
+   on the page, and the role check in the route — the third is not redundant,
+   because a page guard does not protect an endpoint anyone can curl.
+
+2. **Seven UI states, not three.** The two extra ones are correctness:
+   - **COULD NOT VERIFY, in amber, never red.** A 500, a 401 mid-shift, a 429 or
+     a dropped connection is *not* a verdict on the ticket. Painting a network
+     blip as INVALID turns away a legitimate holder, which is the one mistake a
+     door cannot make. The copy says so explicitly: "nothing was checked in".
+   - **camera unavailable** promotes the manual field to primary rather than
+     rendering an error page, so a presenter with no webcam is never stuck.
+
+3. **Auto-advance on a PASS only.** PLAN.md asked for a 3s auto-reset and the
+   brief asked for a "Tap to scan next" button; both are honoured, but the
+   asymmetry is the point. A green screen clears itself so a queue keeps moving.
+   ALREADY SCANNED and SECURITY REJECT stay until a human dismisses them, because
+   somebody has to read the original scan time and decide what to do about the
+   person in front of them. Auto-clearing the one screen that needs a decision
+   would be the wrong kind of helpful.
+
+4. **A forged ticket and an unknown ticket are indistinguishable in the
+   response.** Both are `400 { status: "forged" }`. Returning "that id exists but
+   the signature is wrong" would hand a caller an oracle for enumerating real
+   tickets. The *log* separates them — a well-formed payload naming a ticket id
+   that is not in the table means a deleted row or a leaked secret, so it is
+   logged at error while the answer on the wire stays identical.
+
+5. **The event date is shown but does not block.** A VALID screen carries the
+   show's own date so staff can spot a wrong-night ticket. It is deliberately
+   informational: early arrivals and multi-day passes are real, and auto-refusing
+   them would be worse than showing a human the date and letting them judge.
+
+**Library: `@yudiel/react-qr-scanner` 2.6.0.** Four packages
+(`barcode-detector` → `zxing-wasm`, plus `webrtc-adapter`), which is more than
+this project usually accepts — T30 chose `qrcode.react` precisely because it had
+zero. The justification: **there is no zero-dependency option that actually
+works.** It uses the native `BarcodeDetector` where the browser has it (Chrome,
+Edge, Android — decoding at zero byte cost) and lazy-loads the wasm decoder only
+as a fallback, which is what keeps Safari and Firefox working. `html5-qrcode` is
+a ~300KB imperative blob; `qr-scanner` needs a separately served worker;
+hand-rolling `BarcodeDetector` would ship a camera that silently dies if the
+presenter's laptop happens to be Safari. Installed `--ignore-scripts`, and it
+adds **zero** new advisories.
+
+**Two wrong turns in the rate-limit test, both recorded in the script because
+each is a trap worth knowing:**
+
+1. **Sequential requests never tripped it.** At ~250ms per round trip, thirty
+   sequential requests take *longer* than the ten-second window they are meant to
+   fill, so the sliding window had already forgotten the early ones. The limiter
+   was right; the probe was wrong.
+2. **Forty-two at once never tripped it either — for the opposite reason.** That
+   many simultaneous Upstash round trips exceeded the deliberate `timeout: 1000`
+   in `redis.ts`, so the limiter **failed open** and allowed everything. That is
+   correct, documented behaviour (a rate limiter must never be able to take
+   ticket sales offline), but a test that cannot tell it apart from a broken
+   limiter is a test that lies. Now staggered ~40ms apart, and the outcome is
+   reported either way so a future fail-open is visible rather than silent.
+
+Also: the assertion carries a documented **+2 tolerance**, because
+`Ratelimit.slidingWindow` is a sliding-window *counter* — two fixed buckets with
+interpolation, O(1) memory — so the effective allowance is approximate near a
+bucket boundary (this run let 31 through on a limit of 30). Asserting an exact
+ceiling would be asserting something the algorithm never promised.
+
+**Rate limit is 30/10s — the most generous bucket in the app**, against 5/10s on
+holds. A real door scans continuously and throttling a bouncer mid-queue is
+worse than the flood it nominally prevents. It is also not what makes a forged
+ticket unusable; the 128-bit HMAC is. No rate limit meaningfully narrows 2^128.
+
+**`npm run grant-role -- <email> staff` was required to make this reachable at
+all**, and the reason is worth recording: `/scan` is gated to `staff |
+organizer`, the seed creates exactly one non-buyer (`organizer@rush.demo`, which
+has no Supabase Auth credentials), and every account a human can sign in as is a
+`buyer`. So the gate was unreachable by design *and* unreachable in practice.
+The script also prints the step everyone gets stuck on: **sign out and back in**,
+because `public.users.role` fires migration 0004's trigger into
+`auth.users.raw_app_meta_data` and *that* is what lands in the next JWT — the
+token already in the cookie still says `buyer`, so the proxy keeps redirecting
+to `/forbidden` until it refreshes.
+
+**Not verified by me: a real camera reading a real screen.** The decode path
+belongs to a library using the browser's native `BarcodeDetector`, and driving a
+webcam needs a browser I cannot operate here. Everything behind the camera is
+verified: the codec, all five forgery paths, the state machine, the 20-way race,
+both auth layers over HTTP, and the limiter. The manual-entry field exists partly
+so that last mile can be walked without a webcam at all.
+
+**Regression:** hold 20 / expiry 18 / release 18 / checkout 24 / webhook 50 /
+success 18 / ticket 36 / scan 31, the T21 race test (1 winner, 49 conflicts, 0
+errors), and `check-seed.mjs` clean — zero oversells.
 
 > 📸 **Film this.** Scanning a phone screen with a laptop webcam and getting a red "ALREADY USED" is the most demo-friendly thing in the project.
 

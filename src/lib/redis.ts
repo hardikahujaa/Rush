@@ -164,3 +164,29 @@ export const checkoutRateLimiter = redis
       ephemeralCache: new Map(),
     })
   : null;
+
+/**
+ * A FOURTH budget, for the gate scanner - and the most generous of them.
+ *
+ * 30 per 10 seconds against the hold endpoint's 5. The asymmetry is the point:
+ * a real gate scans continuously, and a bouncer throttled mid-queue is a worse
+ * outcome than the flood this is nominally guarding against. Staff are also
+ * authenticated and few, so the identifier space is tiny.
+ *
+ * What this limit is actually for is the unauthenticated case - somebody
+ * hammering /api/scan with guessed payloads before the 401 lands. It is not
+ * what makes a forged ticket unusable; the 128-bit HMAC is. No rate limit
+ * meaningfully narrows 2^128.
+ */
+export const SCAN_RATE_LIMIT = 30;
+
+export const scanRateLimiter = redis
+  ? new Ratelimit({
+      redis,
+      limiter: Ratelimit.slidingWindow(SCAN_RATE_LIMIT, HOLD_RATE_WINDOW),
+      prefix: "rush:ratelimit:scan",
+      analytics: false,
+      timeout: 1000,
+      ephemeralCache: new Map(),
+    })
+  : null;
