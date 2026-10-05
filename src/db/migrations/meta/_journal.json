@@ -36,6 +36,13 @@
       "when": 1787687932490,
       "tag": "0004_sync_role_to_jwt",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1787687992490,
+      "tag": "0005_realtime_seats",
+      "breakpoints": true
     }
   ]
 }

@@ -1713,7 +1713,7 @@ conflicts, 0 errors), and `check-seed.mjs` clean — zero oversells.
 
 ## PHASE 8 — Realtime
 
-### ☐ T33 🔴 — Live seat updates
+### ☑ T33 🔴 — Live seat updates
 
 **Prompt (Plan Mode):**
 
@@ -1721,6 +1721,134 @@ conflicts, 0 errors), and `check-seed.mjs` clean — zero oversells.
 
 **Verify:** two browser windows, same event. Hold a seat in one — it turns amber in the other within a second, with no refresh.
 **Commit:** `feat: realtime seat updates`
+
+**Done.** `migrations/0005_realtime_seats.sql`,
+`src/components/seats/use-seat-realtime.ts`, `use-second-tick.ts`, and the merge
+in `seat-map.tsx`. `npm run realtime-test` — **21 checks**, subscribing with the
+**anon key** so RLS is actually enforced. A hold reached the subscriber in
+**302 ms**.
+
+**THE PROBLEM THE BRIEF DOES NOT MENTION: lazy expiry broadcasts nothing.**
+Realtime streams row changes, so it only sees transitions that write a row:
+
+| transition | writes `seats`? | broadcasts? |
+|---|---|---|
+| hold created | `holds.ts:310` → `'held'` | ✅ |
+| hold released | `holds.ts:463` → `'available'` | ✅ |
+| seat sold | `webhooks.ts:361` → `'sold'` | ✅ |
+| **hold expires** | **nothing — T22 by design** | ❌ |
+
+`availability.ts` says it outright: an expiring hold "simply stops satisfying
+`expires_at > now()`". Naive realtime would therefore leave an expired seat amber
+in every *other* browser until the 03:00 cron — wrong for up to 24 hours.
+**Fix:** `getSeatMapForEvent` now ships each held seat's `holdExpiresAt`, and the
+client applies the same rule the database applies. That is T22's read-time
+decision, moved to render time, which is the only place that can make it without
+a write or a poll. One shared `useSecondTick` drives all 288 seats.
+
+**A MEASURED FINDING THAT CHANGED THE DESIGN.** The first run of the test showed
+something odd: the *release* event arrived but the *hold* did not. Both write
+`seats.status` identically. A focused probe explained it — **Supabase reports
+`SUBSCRIBED` before the server-side change feed is armed for the filter:**
+
+    no settle after SUBSCRIBED:  HOLD -> MISSED,   RELEASE -> 484 ms
+    2.5s settle:                 HOLD -> 1049 ms,  RELEASE -> 484 ms
+
+So a change in the first second or two after connecting is dropped without a
+trace. That invalidated an optimisation I had already written: I was skipping the
+resync on the *first* subscribe on the reasonable grounds that the props were
+seconds old. But a change lost in the warm-up window produces no event, so it
+also produces no resync — the map starts stale with nothing left to correct it.
+**Every subscribe now resyncs**, and because the refresh is already debounced
+into the 1.2-3.0s band it lands exactly where the warm-up ends.
+
+**Reconnection, which the brief does ask for.** `postgres_changes` has **no
+backfill** — a subscriber gets what happens while it is connected and nothing
+else. A thirty-second blip would otherwise leave the map permanently wrong with
+no error anywhere, which is worse than having no live updates at all. So the hook
+refetches on every transition into `SUBSCRIBED`, and surfaces
+`connecting`/`reconnecting` in the UI. `live` renders **nothing** — a permanent
+green dot is noise, and only degradation is worth saying.
+
+**Decisions worth recording:**
+
+1. **`postgres_changes`, not Supabase Broadcast.** Broadcast scales better and
+   needs neither a publication nor RLS, but it is a SECOND write path that can
+   fail *after* the transaction commits — leaving the socket and Postgres
+   disagreeing with no way to tell which is right. T20, T22 and T28 were each
+   spent deleting that class of divergence. `postgres_changes` is derived from
+   the WAL, so it cannot disagree with the database.
+2. **`seats` only, never `holds`.** A hold row carries `user_id`. The seat's
+   *status* is a public fact; who holds it is not — which is why migration 0005
+   grants a read policy on exactly one of those two tables, and the test asserts
+   `holds` is **not** published.
+3. **`filter: event_id=eq.<uuid>` is load-bearing, not an optimisation.**
+   Without it every client decodes every seat change for all eleven events.
+4. **The refresh is debounced AND jittered (1.2-3.0s, random per client).**
+   Every client receives the same burst within milliseconds, so a bare
+   `router.refresh()` would answer a popular drop by pointing a synchronised
+   stampede at our own server at the moment it can least absorb one. Forty seats
+   changing in a second also has to cost **one** refresh, not forty.
+5. **Tier counts are now reduced from the live seat list.** `tiers` arrives with
+   stats computed at request time; the instant Realtime moves a seat those
+   numbers describe a room that no longer exists — the legend would read "12
+   left" over a grid showing eleven, and a standing zone would stay clickable on
+   its last admission. This is T22's "the counts ARE the seats" applied one layer
+   out. (The page *header* cannot be fixed client-side at all — it lives in a
+   server component — which is the other reason the reconciling refresh exists.)
+6. **Realtime overrides are dropped wholesale when fresh props arrive**, not
+   reconciled one by one. An override knows a status but never *why*: an event
+   saying "held" cannot know the hold has since expired, so a kept override can
+   outlive the fact it described.
+7. **A CSS transition, not per-seat Framer Motion.** This component mounts up to
+   288 times; a JS animation per instance would turn one message into a render
+   storm. `motion-safe:` lets Tailwind do the `prefers-reduced-motion` gating at
+   the CSS level.
+8. **Seats taken from under the user are now announced.** `selected` already
+   filtered unavailable seats, so the cart self-corrected — correctly but
+   *silently*. Before T33 that only followed an action the user had just taken;
+   now a seat can vanish while they read the map, and a total that drops with no
+   explanation reads as our arithmetic being wrong rather than someone else being
+   faster.
+
+**THE SECURITY WORK, which T33 forced into existence.** Before this task the
+database was in an odd but safe state: RLS **ON** for all ten tables with
+**zero policies** — deny-all — while `anon` and `authenticated` held
+`INSERT, UPDATE, DELETE, TRUNCATE` on **every table**, including `orders`,
+`tickets`, `users` and `webhook_events`. The only thing between a visitor with
+the public anon key and `UPDATE tickets SET checked_in_at = NULL` was the absence
+of a policy. RLS was doing one hundred percent of the work; the grants
+contributed nothing.
+
+T33 writes the project's first policy, so from here every policy is layered on
+top of full DML — and `FOR ALL USING (true)` is one of the most copy-pasted
+lines in the Supabase ecosystem. Migration 0005 therefore also **revokes
+`INSERT/UPDATE/DELETE/TRUNCATE/REFERENCES/TRIGGER`** from both API roles, alters
+the schema's **default privileges** so the next table does not silently
+re-acquire them, and revokes sequence `USAGE`/`UPDATE`. Verified safe first:
+the Supabase client is used **only** for `auth.*` — not one `.from()` call
+exists in `src/` — and every query runs through Drizzle as `postgres`, which has
+`rolbypassrls = true`. Confirmed after: grants reduced to `SELECT` only, and the
+test asserts anon can still read `seats` (realtime depends on it) while
+`orders`/`tickets`/`users`/`holds` return nothing and writes are refused.
+
+**React 19 rules fired twice more**, for the fourth and fifth time in this
+project: `setState` in an effect body (fixed by deriving the connection state
+from what the channel reports) and `react-hooks/refs` forbidding a ref write
+during render (fixed by syncing in an effect, with `useRef(fn)` seeding the
+correct initial value so no callback can see a stale function).
+
+**Not verified by me: the two-window demo.** Driving two real browsers needs a
+browser I cannot operate here. What *is* verified is strictly the harder half —
+a genuine anon-key socket receiving a genuine committed hold in 302 ms, with RLS
+enforced — plus the publication, the policy, the expiry gap, and the grant
+hardening. Open the same event in two windows and hold a seat in one; the
+recording is the thing PLAN.md is asking for.
+
+**Regression:** hold 20 / expiry 18 / release 18 / checkout 24 / webhook 50 /
+success 18 / ticket 36 / scan 31 / email 37 / realtime 21, the T21 race test
+(1 winner, 49 conflicts, 0 errors), `verify-seat-sync` and `verify-seat-math`
+14/14 each, and `check-seed.mjs` clean — zero oversells.
 
 > 📸 **This is your money shot.** Record it.
 
@@ -1937,7 +2065,7 @@ Grab a domain (free with the GitHub Student Pack) and point it at Vercel.
 | 5 · **Booking engine** | T19–T25 | ☐ |
 | 6 · Payments | T26–T29 | ☑ |
 | 7 · Tickets & check-in | T30–T32 | ☑ |
-| 8 · Realtime | T33 | ☐ |
+| 8 · Realtime | T33 | ☑ |
 | 9 · Waiting room | T34–T35 | ☐ |
 | 10 · Dashboard | T36–T38 | ☐ |
 | 11 · Design | T39–T41 | ☐ |

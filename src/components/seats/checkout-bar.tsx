@@ -34,6 +34,7 @@ export function CheckoutBar({
   coolingDown,
   error,
   canHold,
+  takenFromSelection = 0,
 }: {
   selected: Seat[];
   tiersById: Map<string, Tier>;
@@ -49,6 +50,11 @@ export function CheckoutBar({
   error: string | null;
   /** False for mock events, which have no database seats to hold. */
   canHold: boolean;
+  /**
+   * How many of the user's chosen seats were taken by someone else while they
+   * were looking at the map (T33). Zero in the ordinary case.
+   */
+  takenFromSelection?: number;
 }) {
   const reduceMotion = useReducedMotion();
 
@@ -157,12 +163,19 @@ export function CheckoutBar({
               region exists in the accessibility tree before it has content -
               a live region injected at the same moment as its text is often
               missed entirely by screen readers. */}
+          {/* Precedence, most urgent first: a server refusal, then seats taken
+              out from under the user, then their own limit. All three are the
+              same slot because only one can be the most useful thing to say. */}
           <p role="status" aria-live="polite" className="sr-only">
             {error
               ? error
-              : limitHit > 0
-                ? `Limit reached. You can select at most ${MAX_SEATS} seats. Remove one to choose another.`
-                : ""}
+              : takenFromSelection > 0
+                ? `${takenFromSelection} of your selected ${
+                    takenFromSelection === 1 ? "seat was" : "seats were"
+                  } just taken by someone else and removed from your selection.`
+                : limitHit > 0
+                  ? `Limit reached. You can select at most ${MAX_SEATS} seats. Remove one to choose another.`
+                  : ""}
           </p>
 
           {/* The server's answer wins the slot: "someone took that seat" is
@@ -170,6 +183,11 @@ export function CheckoutBar({
           {error ? (
             <p aria-hidden="true" className="mt-1.5 text-[11px] font-medium text-gold-champagne">
               {error}
+            </p>
+          ) : takenFromSelection > 0 ? (
+            <p aria-hidden="true" className="mt-1.5 text-[11px] font-medium text-gold-champagne">
+              {takenFromSelection} {takenFromSelection === 1 ? "seat" : "seats"} just
+              went to someone else &mdash; removed from your selection.
             </p>
           ) : limitHit > 0 ? (
             <p aria-hidden="true" className="mt-1.5 text-[11px] text-gold-champagne/90">

@@ -82,6 +82,31 @@ export function liveHoldOwner(seatRef: SQL): SQL {
   )`;
 }
 
+/**
+ * WHEN this seat's live hold runs out, or null.
+ *
+ * ── WHY T33 NEEDED THIS ────────────────────────────────────────────────────
+ * Realtime streams row changes, and a hold EXPIRING changes no row - that is
+ * the whole point of lazy expiry above. So a seat freed by expiry produces no
+ * broadcast, and every other browser would keep showing it as held until the
+ * daily cleanup cron happened to run.
+ *
+ * Shipping the expiry timestamp to the client lets it apply the same rule the
+ * database applies: when `expires_at` passes, the seat is available. It is T22's
+ * "decide at read time" moved to the render, which is the only place that can
+ * decide it without either a write or a poll.
+ *
+ * Safe to expose - it is a timestamp. WHO holds the seat stays server-side;
+ * `liveHoldOwner` is not sent to any browser.
+ */
+export function liveHoldExpiry(seatRef: SQL): SQL {
+  return sql`(
+    select h.expires_at from ${holds} h
+    where h.seat_id = ${seatRef} and ${holdIsLive(sql`h`)}
+    limit 1
+  )`;
+}
+
 /** Available: neither sold nor under a live hold. */
 export function seatIsAvailable(seatRef: SQL): SQL {
   return sql`not ${seatIsSold(seatRef)} and not ${seatHasLiveHold(seatRef)}`;

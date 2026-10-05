@@ -28,6 +28,7 @@
     "seed-events": "tsx --conditions=react-server --env-file=.env.local scripts/seed-events.ts",
     "grant-role": "tsx --conditions=react-server --env-file=.env.local scripts/grant-role.ts",
     "scan-test": "tsx --conditions=react-server --env-file=.env.local scripts/scan-test.ts",
+    "realtime-test": "tsx --conditions=react-server --env-file=.env.local scripts/realtime-test.ts",
     "email-test": "tsx --env-file=.env.local scripts/email-test.mts",
     "email-preview": "tsx --env-file=.env.local scripts/email-preview.mts",
     "race-test": "tsx --conditions=react-server --env-file=.env.local scripts/race-test.ts"

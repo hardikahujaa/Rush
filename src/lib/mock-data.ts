@@ -29,6 +29,15 @@ export type Seat = {
   row: string;
   number: number;
   status: SeatStatus;
+  /**
+   * ISO timestamp at which this seat's live hold lapses, when it has one.
+   *
+   * Optional because mock venues have no holds at all. For a database event it
+   * is what lets the client expire a held seat locally: a hold running out
+   * writes no row, so it produces no realtime event (T33). Null or absent for
+   * any seat that is not currently held.
+   */
+  holdExpiresAt?: string | null;
 };
 
 export type Tier = {

@@ -128,6 +128,23 @@ export function SeatButton({
       className={[
         "relative flex size-7 shrink-0 items-center justify-center rounded-[5px] border text-[9px] font-semibold outline-none",
         "focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-black",
+        /**
+         * The smooth colour change T33 asks for, as a CSS transition.
+         *
+         * Deliberately NOT a Framer Motion animation per seat. A single hold
+         * during a drop can flip four seats, and a burst can flip dozens - this
+         * component is mounted up to 288 times, so anything that spins up a JS
+         * animation per instance turns one realtime message into a render storm.
+         * `background-color` and `border-color` are both compositor-friendly and
+         * degrade to an instant swap if the browser is busy, which is the right
+         * failure mode for a seat map.
+         *
+         * `motion-safe:` is Tailwind's own `prefers-reduced-motion` guard, so a
+         * reduced-motion visitor gets the new colour immediately rather than a
+         * fade. Unlike `animate-pulse` below, which needed gating by hand, this
+         * variant does it at the CSS level.
+         */
+        "motion-safe:transition-[background-color,border-color] motion-safe:duration-500 motion-safe:ease-out",
         unavailable ? "cursor-not-allowed" : "cursor-pointer",
         seat.status === "held" && !mine && !reduceMotion ? "animate-pulse" : "",
       ]

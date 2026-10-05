@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { motion, useReducedMotion } from "framer-motion";
 
@@ -8,8 +8,10 @@ import { CheckoutBar, MAX_SEATS } from "@/components/seats/checkout-bar";
 import { HoldBanner, type HeldSeatView } from "@/components/seats/hold-banner";
 import { SeatButton, keepClearOfCart } from "@/components/seats/seat-button";
 import { TierLegend } from "@/components/seats/tier-legend";
+import { useSeatRealtime, type SeatChange } from "@/components/seats/use-seat-realtime";
+import { useSecondTick } from "@/components/seats/use-second-tick";
 import { FocalEdge, VenueFrame } from "@/components/seats/venue-frame";
-import type { Seat, TierWithStats, VenueType } from "@/lib/mock-data";
+import type { Seat, SeatStatus, TierWithStats, VenueType } from "@/lib/mock-data";
 import { formatPaise } from "@/lib/format";
 
 /** The 200 body from POST /api/holds. */
@@ -128,6 +130,16 @@ export function SeatMap({
   const [justReleased, setJustReleased] = useState<Set<string>>(new Set());
 
   /**
+   * Statuses pushed by Realtime since the last time fresh props arrived (T33).
+   *
+   * Kept in a Map rather than merged into a copy of `seats`, for the same
+   * reason `justReleased` is: a second copy of the seat list is a second thing
+   * that can disagree with the server. This is an OVERLAY, applied during
+   * render and discarded the moment real data lands.
+   */
+  const [liveStatus, setLiveStatus] = useState<Map<string, SeatStatus>>(new Map());
+
+  /**
    * Drop the override the moment real data arrives.
    *
    * Without this the override outlives its purpose: hold one of those seats
@@ -144,13 +156,122 @@ export function SeatMap({
   if (seats !== seatsSeen) {
     setSeatsSeen(seats);
     if (justReleased.size > 0) setJustReleased(new Set());
+    /**
+     * Realtime overrides are dropped wholesale, not reconciled one by one.
+     *
+     * The alternative - keeping any override the new props disagree with - is
+     * tempting and wrong. An override only knows a status, never WHY: an event
+     * saying "held" cannot tell that the hold has since expired, so a kept
+     * override can outlive the fact it described and show a held seat that is
+     * genuinely free. That is precisely the stale lie the `justReleased` note
+     * above warns about.
+     *
+     * Dropping them is safe because the refresh that produced these props was
+     * SCHEDULED BY those same events, so it necessarily reflects them. The
+     * server is the source of truth; an overlay is only ever a guess about the
+     * gap between two reads of it.
+     */
+    if (liveStatus.size > 0) setLiveStatus(new Map());
   }
   const reduceMotion = useReducedMotion();
+
+  /* ── LIVE UPDATES ──────────────────────────────────────────────────────── */
+
+  const tick = useSecondTick();
+
+  /**
+   * Reconciliation, debounced AND jittered.
+   *
+   * Realtime paints instantly but can only carry a seat's status. Three things
+   * it cannot carry need a real refetch:
+   *
+   *   - the new hold's `expires_at`, which the `seats` row does not contain and
+   *     which the local-expiry rule below needs
+   *   - the per-tier counts in the legend, and the standing zones' remaining
+   *     admissions
+   *   - the page header's "N of M seats available" and its sold-out banner,
+   *     which live in a SERVER component and cannot be reached from here at all
+   *
+   * ── WHY THE JITTER IS NOT DECORATION ──────────────────────────────────────
+   * Every client watching this event receives the same burst within
+   * milliseconds of each other. A bare `router.refresh()` would have all of
+   * them re-request the page inside the same instant - so the app would answer
+   * a popular drop by pointing a synchronised stampede at itself, at precisely
+   * the moment it is least able to absorb one. A random delay spreads that
+   * stampede into a trickle.
+   *
+   * Coalescing matters as much: forty seats changing in one second must cost
+   * ONE refresh, not forty.
+   */
+  const refreshTimer = useRef<number | null>(null);
+
+  const scheduleRefresh = useCallback(() => {
+    if (refreshTimer.current !== null) return; // already pending - coalesce
+    const delay = 1200 + Math.random() * 1800; // 1.2-3.0s, spread per client
+    refreshTimer.current = window.setTimeout(() => {
+      refreshTimer.current = null;
+      router.refresh();
+    }, delay);
+  }, [router]);
+
+  useEffect(
+    () => () => {
+      if (refreshTimer.current !== null) window.clearTimeout(refreshTimer.current);
+    },
+    [],
+  );
+
+  const handleSeatChange = useCallback((change: SeatChange) => {
+    setLiveStatus((current) => {
+      if (current.get(change.id) === change.status) return current; // no-op
+      const next = new Map(current);
+      next.set(change.id, change.status);
+      return next;
+    });
+    scheduleRefresh();
+  }, [scheduleRefresh]);
+
+  /**
+   * EVERY subscribe resyncs, including the first — and that is a correction.
+   *
+   * The first version of this skipped the first `SUBSCRIBED` on the reasonable
+   * grounds that the props were seconds old already, so refreshing would make
+   * every page load re-request itself for nothing.
+   *
+   * MEASURED, and it was wrong. Supabase reports `SUBSCRIBED` *before* the
+   * server-side change feed is actually armed for the filter. In
+   * `scripts/realtime-test.ts` a hold committed immediately after that callback
+   * was never delivered, while the very next write on the same channel arrived
+   * in 484ms; inserting a 2.5s settle made the same hold arrive in 1049ms.
+   *
+   * So there is a window of roughly a second or two after subscribing in which
+   * a change is silently lost. A change lost there is the worst possible kind:
+   * it produces no event, so it also produces no resync, and the map stays
+   * wrong with nothing left to correct it.
+   *
+   * Resyncing on the first subscribe closes that window - and because the
+   * refresh is already debounced into the 1.2-3.0s band, it lands right where
+   * the warm-up ends. One cheap RSC re-render per page load buys a seat map
+   * that cannot start out stale.
+   */
+  const handleResync = useCallback(() => {
+    scheduleRefresh();
+  }, [scheduleRefresh]);
+
+  const realtime = useSeatRealtime({
+    eventId,
+    /* Mock events have seat ids that exist nowhere in Postgres, so there is
+       nothing to subscribe to and nothing would ever arrive. */
+    enabled: canHold,
+    onChange: handleSeatChange,
+    onResync: handleResync,
+  });
 
   const tiersById = useMemo(
     () => new Map(tiers.map((tier) => [tier.id, tier])),
     [tiers],
   );
+
   /**
    * The seat list as the user should see it right now.
    *
@@ -159,20 +280,91 @@ export function SeatMap({
    * state, so when the server does send fresh data the override simply stops
    * mattering - there is no second copy to remember to clear.
    */
-  const visibleSeats = useMemo(
-    () =>
-      justReleased.size === 0
-        ? seats
-        : seats.map((seat) =>
-            justReleased.has(seat.id) ? { ...seat, status: "available" as const } : seat,
-          ),
-    [seats, justReleased],
-  );
+  const visibleSeats = useMemo(() => {
+    const nothingToApply =
+      justReleased.size === 0 && liveStatus.size === 0 && tick === 0;
+    if (nothingToApply) return seats;
+
+    const nowMs = tick * 1000;
+
+    return seats.map((seat) => {
+      /* 1. Realtime first: newer than the prop by construction, because the
+            overlay is cleared every time props change. */
+      let status = liveStatus.get(seat.id) ?? seat.status;
+
+      /**
+       * 2. LOCAL EXPIRY - the transition Realtime can never deliver.
+       *
+       * A hold running out writes no row (T22), so Postgres emits no change and
+       * the socket stays silent. Without this, a seat freed by expiry would
+       * stay amber in every other browser until the 03:00 cron happened to run.
+       *
+       * So the client applies the same rule the database applies - `expires_at`
+       * in the past means not held - which is T22's read-time decision, made at
+       * render time. `tick === 0` means pre-hydration, where the server's own
+       * status is the only honest answer.
+       *
+       * Only ever relaxes a seat from held to available; it can never invent a
+       * hold or override a sale.
+       */
+      if (
+        status === "held" &&
+        tick > 0 &&
+        seat.holdExpiresAt &&
+        new Date(seat.holdExpiresAt).getTime() <= nowMs
+      ) {
+        status = "available";
+      }
+
+      /* 3. A release this browser performed and the server has confirmed. Last
+            because it is the one thing we know first-hand. */
+      if (justReleased.has(seat.id)) status = "available";
+
+      return status === seat.status ? seat : { ...seat, status };
+    });
+  }, [seats, justReleased, liveStatus, tick]);
 
   const seatsById = useMemo(
     () => new Map(visibleSeats.map((seat) => [seat.id, seat])),
     [visibleSeats],
   );
+
+  /**
+   * Tier counts, recomputed from the LIVE seat list.
+   *
+   * ── WHY THE SERVER'S COUNTS CANNOT BE USED ONCE SEATS MOVE ────────────────
+   * `tiers` arrives with `stats` computed by `getSeatMapForEvent` at request
+   * time. The instant Realtime changes a seat, those numbers describe a room
+   * that no longer exists - so the legend would say "12 left" over a grid
+   * showing eleven, and a standing zone would stay enabled on its last
+   * admission after somebody else took it.
+   *
+   * That failure has a history here. T22 found `getSeatMapForEvent` running two
+   * queries whose availability rules had drifted, and fixed it by making the
+   * counts a REDUCTION of the seat list rather than a second computation - so
+   * disagreement became unrepresentable rather than merely absent. Reducing the
+   * live list here is the same fix applied to the same risk, one layer out: the
+   * counts are the seats, so they cannot contradict them.
+   *
+   * Standing tiers have no per-seat buttons, but `mock-data.ts` still generates
+   * one seat row per admission, so the same reduction covers them.
+   */
+  const liveTiers = useMemo<TierWithStats[]>(() => {
+    const counts = new Map<string, { total: number; available: number; held: number; sold: number }>();
+    for (const tier of tiers) {
+      counts.set(tier.id, { total: 0, available: 0, held: 0, sold: 0 });
+    }
+    for (const seat of visibleSeats) {
+      const bucket = counts.get(seat.tierId);
+      if (!bucket) continue;
+      bucket.total++;
+      bucket[seat.status]++;
+    }
+    return tiers.map((tier) => ({
+      ...tier,
+      stats: counts.get(tier.id) ?? tier.stats,
+    }));
+  }, [tiers, visibleSeats]);
 
   /**
    * RECONCILED DURING RENDER, NOT IN AN EFFECT.
@@ -194,6 +386,22 @@ export function SeatMap({
     () => new Set(selected.map((seat) => seat.id)),
     [selected],
   );
+
+  /**
+   * How many seats the user had chosen that somebody else just took.
+   *
+   * `selected` already filters out anything no longer available, so the cart
+   * self-corrects - which is correct but SILENT. Before T33 that only happened
+   * after an explicit action the user had just taken, so the cause was obvious.
+   * Now a seat can vanish from the cart while they are reading the map, and a
+   * total that quietly drops with no explanation reads as a bug in our
+   * arithmetic rather than as somebody else being faster.
+   *
+   * Derived, not stored: `selectedIds` only ever shrinks through an explicit
+   * toggle or removal, so any gap between the two lengths IS the number taken
+   * from under them. No effect, nothing to keep in sync.
+   */
+  const takenFromSelection = selectedIds.length - selected.length;
 
   function toggle(seat: Seat) {
     setError(null);
@@ -443,7 +651,37 @@ export function SeatMap({
 
   return (
     <>
-      <TierLegend tiers={tiers} />
+      {/*
+        THE CONNECTION STATE, SHOWN ONLY WHEN IT IS NOT FINE.
+
+        A live map and a frozen one look identical, which is the problem: a
+        socket that dropped silently leaves somebody choosing seats from a
+        snapshot while believing they are watching the room. "live" therefore
+        renders nothing - no badge, no reassurance, because a permanent green
+        dot is noise - and only degradation is announced.
+
+        Not `assertive`: this is context, not an interruption, and the user is
+        mid-task on a grid they would lose their place in.
+      */}
+      {(realtime === "connecting" || realtime === "reconnecting") && (
+        <p
+          role="status"
+          aria-live="polite"
+          className="mb-3 inline-flex items-center gap-2 rounded-full border border-white/12 bg-white/[0.04] px-3 py-1.5 text-[11px] font-medium text-muted-foreground"
+        >
+          <span
+            aria-hidden="true"
+            className={`size-1.5 shrink-0 rounded-full bg-gold ${
+              reduceMotion ? "" : "animate-pulse"
+            }`}
+          />
+          {realtime === "connecting"
+            ? "Connecting for live seat updates\u2026"
+            : "Reconnecting \u2014 seats may be a few seconds behind"}
+        </p>
+      )}
+
+      <TierLegend tiers={liveTiers} />
 
       {/*
         THE MAP FLOOR.
@@ -470,7 +708,10 @@ export function SeatMap({
             <VenueFrame venueType={venueType} />
 
             <div className="relative flex flex-col items-center gap-6 py-4">
-              {tiers.map((tier) => {
+              {/* liveTiers, not tiers: a standing zone's remaining-admissions
+                  count and its disabled state have to reflect what Realtime
+                  just told us, or the zone stays clickable after it is full. */}
+              {liveTiers.map((tier) => {
                 /* ── STANDING: a zone, not seats ───────────────────────── */
                 if (tier.isStanding) {
                   const left = tier.stats.available;
@@ -615,6 +856,7 @@ export function SeatMap({
           coolingDown={cooldownUntil > 0}
           error={error}
           canHold={canHold}
+          takenFromSelection={takenFromSelection}
         />
       )}
     </>

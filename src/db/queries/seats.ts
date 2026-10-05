@@ -3,7 +3,7 @@ import "server-only";
 import { sql } from "drizzle-orm";
 
 import { db } from "@/db";
-import { seatStatusExpr } from "@/db/queries/availability";
+import { liveHoldExpiry, seatStatusExpr } from "@/db/queries/availability";
 import { seats, sections } from "@/db/schema";
 import {
   TIER_COLORS,
@@ -78,6 +78,11 @@ export async function getSeatMapForEvent(
     section_name: string;
     price_cents: number;
     status: SeatStatus;
+    /* NOT `Date`. A raw `execute` bypasses Drizzle's column mapping, so a
+       timestamptz arrives as a string (or null). Typing it as Date compiles and
+       then throws on `.toISOString()` - the same trap documented in
+       queries/holds.ts step 8 and queries/events.ts. */
+    hold_expires_at: string | Date | null;
   }>(sql`
     select
       st.id,
@@ -86,7 +91,10 @@ export async function getSeatMapForEvent(
       st.seat_no,
       sec.name       as section_name,
       sec.price_cents,
-      ${seatStatusExpr(sql`st.id`)} as status
+      ${seatStatusExpr(sql`st.id`)} as status,
+      /* T33: the client needs this to expire a held seat locally, because a
+         hold running out writes no row and so broadcasts nothing. */
+      ${liveHoldExpiry(sql`st.id`)} as hold_expires_at
     from ${seats} st
     join ${sections} sec on sec.id = st.section_id
     where st.event_id = ${eventId}
@@ -127,6 +135,12 @@ export async function getSeatMapForEvent(
       row: row.row_label,
       number: row.seat_no,
       status: row.status,
+      /* Only meaningful while the seat is held; null for everything else, so
+         the client has nothing to misread on an available or sold seat. */
+      holdExpiresAt:
+        row.hold_expires_at === null
+          ? null
+          : new Date(row.hold_expires_at).toISOString(),
     });
   }
 
