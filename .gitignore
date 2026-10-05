@@ -42,3 +42,6 @@ next-env.d.ts
 
 # keep the template tracked, ignore all real env files
 !.env.example
+
+# Rendered by scripts/email-preview.mts --html; never committed.
+email-preview.html

@@ -1,10 +1,12 @@
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 import type Stripe from "stripe";
 
+import { getOrderForReceipt } from "@/db/queries/orders";
 import {
   expireCheckoutSession,
   fulfillCheckoutSession,
 } from "@/db/queries/webhooks";
+import { sendTicketConfirmation } from "@/lib/email";
 import { stripe } from "@/lib/stripe";
 import { checkoutMetadataSchema } from "@/lib/validation/webhook";
 
@@ -254,6 +256,58 @@ export async function POST(request: Request) {
             `[stripe-webhook] order ${result.orderId} paid — ${result.ticketCount} ticket(s), ` +
               `${result.totalCents} paise, ${result.holdsReleased} hold(s) released.`,
           );
+
+          /**
+           * ── THE CONFIRMATION EMAIL (T32) ─────────────────────────────────
+           *
+           * Three deliberate properties, in order of how badly each would hurt
+           * to get wrong:
+           *
+           * 1. **It is inside `case "fulfilled"`, so it cannot double-send.**
+           *    That branch is reachable exactly once per order - the unique
+           *    index on `webhook_events.stripe_event_id` is what makes it so.
+           *    A Stripe retry or a dashboard resend lands on `replayed` or
+           *    `already_paid` and never reaches this line. The email inherits
+           *    T28's idempotency rather than needing its own.
+           *
+           * 2. **It runs in `after()`, so Stripe gets its 200 first.** The
+           *    response is already sent by the time Resend is called, so a slow
+           *    or hanging mail provider cannot delay the webhook into Stripe's
+           *    timeout - which would make Stripe retry a payment that was
+           *    fulfilled perfectly well.
+           *
+           * 3. **It cannot fail the webhook, by construction and not just by
+           *    try/catch.** `sendTicketConfirmation` already returns a result
+           *    rather than throwing, and the extra catch here is for anything
+           *    unforeseen on the way to it. The brief asked that the webhook
+           *    still return 200; `after()` means the 200 has physically left
+           *    before this code runs, so there is no path by which an email can
+           *    change it.
+           *
+           * The ticket is NOT the email. Everything a buyer needs is already in
+           * Postgres and on /tickets, so a send that never happens costs a
+           * convenience, not an entry.
+           */
+          after(async () => {
+            try {
+              const receipt = await getOrderForReceipt(result.orderId);
+              if (!receipt) {
+                console.error(
+                  `[stripe-webhook] order ${result.orderId} vanished before the email could be built.`,
+                );
+                return;
+              }
+              await sendTicketConfirmation(receipt);
+            } catch (emailError) {
+              /* Loud, because nobody is watching this path and the buyer will
+                 not know their receipt is missing. Never rethrown. */
+              console.error(
+                `[stripe-webhook] confirmation email failed for order ${result.orderId} ` +
+                  `— the tickets ARE issued and visible at /tickets:`,
+                emailError,
+              );
+            }
+          });
           break;
 
         case "replayed":

@@ -268,9 +268,27 @@ async function main() {
       );
     }
   }
+  /**
+   * The tolerance is not slack - it is what the algorithm actually promises.
+   *
+   * `Ratelimit.slidingWindow` is a sliding-window COUNTER: two fixed buckets
+   * with interpolation between them, which is O(1) memory instead of a
+   * timestamp per request. The price is that the effective allowance is
+   * approximate near a bucket boundary, so a limit of 5 can let a 6th through
+   * depending on where in the wall clock the run lands.
+   *
+   * This assertion originally demanded the 429 land by request 6 exactly, and
+   * flaked for that reason - observed failing with "first 429 at request 7" and
+   * then passing twice in a row, unchanged. Asserting an exact trip point was
+   * asserting something Upstash never guaranteed. What matters, and what this
+   * still catches, is that the limiter trips at all and trips near the limit
+   * rather than at double it. (Same reasoning, same tolerance, as the gate
+   * scanner's rate-limit section in scripts/scan-test.ts.)
+   */
+  const slack = 2;
   check(
-    `the limiter trips at or before request ${CHECKOUT_RATE_LIMIT + 1}`,
-    sawRateLimited && firstRateLimitedAt <= CHECKOUT_RATE_LIMIT + 1,
+    `the limiter trips by request ${CHECKOUT_RATE_LIMIT + 1 + slack} (limit ${CHECKOUT_RATE_LIMIT} + window slack)`,
+    sawRateLimited && firstRateLimitedAt <= CHECKOUT_RATE_LIMIT + 1 + slack,
     sawRateLimited ? `first 429 at request ${firstRateLimitedAt}` : "never saw a 429",
   );
 }

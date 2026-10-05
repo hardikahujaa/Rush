@@ -12,6 +12,7 @@ import {
   seats,
   sections,
   tickets,
+  users,
   venues,
 } from "@/db/schema";
 
@@ -393,4 +394,83 @@ export async function getOrderStatusForUser(
     .where(eq(tickets.orderId, orderId));
 
   return { status: order.status, ticketCount: issued.length };
+}
+
+/* ── the confirmation email's data (T32) ────────────────────────────────── */
+
+export type OrderReceipt = OrderView & {
+  buyerEmail: string;
+  buyerName: string | null;
+};
+
+/**
+ * One order with everything the confirmation email needs, including who to
+ * send it to.
+ *
+ * ── WHY THIS IS NOT SCOPED TO A USER, UNLIKE getOrderForUser ───────────────
+ * `getOrderForUser` carries `user_id = $me` because it answers a request from a
+ * browser. This one is called by the Stripe webhook, which has no user and no
+ * session - it has a signature-verified event and an order id. Scoping it to a
+ * user would mean the webhook first asking "whose order is this?" and then
+ * passing the answer back in as a filter, which is a check that cannot fail and
+ * therefore is not a check.
+ *
+ * It is NOT exported to any route handler, and the module is `server-only`, so
+ * the only way to reach it is from server code that already knows why it wants
+ * an order.
+ *
+ * ── WHY THE RECIPIENT COMES FROM OUR DATABASE, NOT FROM STRIPE ─────────────
+ * `session.customer_email` is sitting right there in the webhook payload, and
+ * using it would be one less join. But it is a copy we handed Stripe at
+ * checkout time, and `users.email` is the source of truth - kept in step with
+ * `auth.users` by the trigger in migration 0003. Reading the copy would mean a
+ * buyer who corrected their address still gets the ticket at the old one.
+ */
+export async function getOrderForReceipt(
+  orderId: string,
+): Promise<OrderReceipt | null> {
+  const [order] = await db
+    .select({
+      orderId: orders.id,
+      status: orders.status,
+      totalCents: orders.totalCents,
+      createdAt: orders.createdAt,
+      eventId: events.id,
+      eventTitle: events.title,
+      venueName: venues.name,
+      venueCity: venues.city,
+      startsAt: events.startsAt,
+      buyerEmail: users.email,
+      buyerName: users.name,
+    })
+    .from(orders)
+    .innerJoin(events, eq(events.id, orders.eventId))
+    .innerJoin(venues, eq(venues.id, events.venueId))
+    .innerJoin(users, eq(users.id, orders.userId))
+    .where(eq(orders.id, orderId))
+    .limit(1);
+
+  if (!order) return null;
+
+  /* The same shape and ordering getOrderForUser produces, so the email and the
+     success page describe a purchase identically. `ticketId` is what the QR
+     payload is built from, so a line with a null ticket cannot be rendered -
+     which only happens if this is called before the webhook issued tickets. */
+  const lines = await db
+    .select({
+      seatId: seats.id,
+      sectionName: sections.name,
+      rowLabel: seats.rowLabel,
+      seatNo: seats.seatNo,
+      priceCents: orderItems.priceCents,
+      ticketId: tickets.id,
+    })
+    .from(orderItems)
+    .innerJoin(seats, eq(seats.id, orderItems.seatId))
+    .innerJoin(sections, eq(sections.id, seats.sectionId))
+    .leftJoin(tickets, eq(tickets.seatId, orderItems.seatId))
+    .where(eq(orderItems.orderId, orderId))
+    .orderBy(sections.priceCents, seats.rowLabel, seats.seatNo);
+
+  return { ...order, seats: lines };
 }

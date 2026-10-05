@@ -66,3 +66,16 @@ export const db = drizzle(conn, { schema });
 
 export type Db = typeof db;
 export { schema };
+
+/**
+ * Close the connection pool.
+ *
+ * For SCRIPTS only. A long-lived server never wants this - the pool is meant to
+ * outlive individual requests - but a one-shot script that calls
+ * `process.exit()` with sockets still open makes libuv assert on Windows
+ * (`!(handle->flags & UV_HANDLE_CLOSING)`), which looks like a crash at the end
+ * of a run that succeeded.
+ */
+export async function closeDb(): Promise<void> {
+  await conn.end({ timeout: 5 });
+}
