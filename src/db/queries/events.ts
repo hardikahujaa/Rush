@@ -108,6 +108,41 @@ function huesFromId(id: string): [number, number] {
   return [a, b];
 }
 
+/** Just enough of an event to decide whether its drop is being queued. */
+export type EventQueueInfo = {
+  id: string;
+  title: string;
+  dropAt: Date;
+  status: "draft" | "scheduled" | "live" | "ended";
+};
+
+/**
+ * The four columns the queue gate needs, and nothing else.
+ *
+ * `getEventById` would answer the same question, but it also joins the venue
+ * and aggregates per-section availability with two correlated subqueries over
+ * every seat in the house. The gate runs on every seat-map render and every
+ * hold attempt during a drop - which is precisely the moment that query is most
+ * expensive and least needed. This is a single indexed primary-key lookup.
+ *
+ * Returns null for an unknown id, including a uuid belonging to no event, so
+ * the caller can decide between notFound() and a 404 body.
+ */
+export async function getEventQueueInfo(id: string): Promise<EventQueueInfo | null> {
+  const rows = await db
+    .select({
+      id: events.id,
+      title: events.title,
+      dropAt: events.dropAt,
+      status: events.status,
+    })
+    .from(events)
+    .where(eq(events.id, id))
+    .limit(1);
+
+  return rows[0] ?? null;
+}
+
 /**
  * One event with its venue and priced sections, including live availability.
  *

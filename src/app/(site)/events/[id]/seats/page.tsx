@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { ArrowLeft, CalendarDays, MapPin } from "lucide-react";
 
 import { SeatMap } from "@/components/seats/seat-map";
@@ -8,6 +8,8 @@ import { getActiveHoldsForUser } from "@/db/queries/holds";
 import { getSeatMapForEvent, type SeatMapData } from "@/db/queries/seats";
 import { getCurrentUser } from "@/lib/auth";
 import { findEvent } from "@/lib/event-lookup";
+import { isQueueActive } from "@/lib/queue";
+import { checkGate, gateRedirect } from "@/lib/queue-gate";
 import { getSeats, getVenue, tierBreakdown } from "@/lib/mock-data";
 
 /** Same test the event resolver uses: a uuid means Postgres, anything else mock. */
@@ -84,6 +86,33 @@ export default async function SeatsPage({ params }: Props) {
 
   if (!event) notFound();
 
+  /**
+   * ── THE QUEUE GATE (T34) ─────────────────────────────────────────────────
+   *
+   * Before the seat map is resolved, not after. Someone who is about to be sent
+   * to the lobby must not cost us the seat query first - and during a drop,
+   * that is most of the traffic hitting this page.
+   *
+   * `isQueueActive` is pure arithmetic on the event row we already have, so the
+   * overwhelmingly common case - no drop in progress - costs nothing and does
+   * not even fetch the user.
+   *
+   * This is layer two, not layer one. `src/proxy.ts` is deliberately NOT
+   * involved: see the long note in `queue-gate.ts` for why a guard that lives
+   * inside the thing it protects is the one that cannot be routed around.
+   */
+  const gated = isQueueActive(event);
+  const user = gated || UUID.test(id) ? await getCurrentUser() : null;
+
+  if (gated) {
+    const verdict = await checkGate({
+      event,
+      eventId: id,
+      userId: user?.id ?? null,
+    });
+    if (!verdict.allowed) redirect(gateRedirect(id, verdict));
+  }
+
   const map = await resolveSeatMap(id);
 
   /**
@@ -97,8 +126,8 @@ export default async function SeatsPage({ params }: Props) {
    *
    * Only for real events: a mock seat id exists nowhere in `holds`.
    */
-  const user = map?.canHold ? await getCurrentUser() : null;
-  const initialHold = user ? await getActiveHoldsForUser(user.id, id) : null;
+  const initialHold =
+    user && map?.canHold ? await getActiveHoldsForUser(user.id, id) : null;
 
   /* Totals are summed from the tiers rather than queried again, so the header,
      the legend and the pricing table are all reductions of one set of numbers. */

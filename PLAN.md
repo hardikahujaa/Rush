@@ -1856,13 +1856,219 @@ success 18 / ticket 36 / scan 31 / email 37 / realtime 21, the T21 race test
 
 ## PHASE 9 — Waiting room
 
-### ☐ T34 🔴 — The drop queue
+### ☑ T34 🔴 — The drop queue
 
 **Prompt (Plan Mode):**
 
 > When an event's status is 'live' and it's within 10 minutes of `dropAt`, gate `/events/[id]/seats` behind a waiting room. Implementation: on entry, if the user has no Redis access token, add them to a Redis sorted set `queue:{eventId}` scored by timestamp and redirect to `/events/[id]/waiting`. The waiting page polls `/api/queue/position` every 2 seconds. A route `/api/queue/admit` pops the first N users and issues them a 15-minute access token in Redis. Explain what a sorted set is and why it's the right structure here.
 
 **Commit:** `feat: waiting room queue`
+
+**Done.** `src/lib/queue.ts` (the Redis engine), `queue-token.ts` (the pass),
+`queue-gate.ts` (the one gate), `queue-api.ts` + `queue-response.ts`,
+`db/queries/queue.ts`, three endpoints under `/api/queue/`, the lobby at
+`/events/[id]/queue`, and `npm run drop-now` to make it demonstrable.
+`npm run queue-test` — **79 checks**, against the real Upstash database.
+
+**WHAT THIS TASK IS ACTUALLY FOR, which is not overselling.** Nothing in T34
+keeps two people off one seat; T20, T21, T28 and T31 already make that
+impossible and would keep doing so with every file here deleted. T34 solves the
+*other* failure of a drop: ten thousand people arriving in the same second, each
+running a seat query, a hold transaction and a Stripe call against a database
+sized for a hundred. The correctness layers hold and the site is still unusable,
+because every request times out. The queue converts "everyone fails at once"
+into "fifty people succeed and the rest are told where they stand".
+
+**THE SCORE IS AN `INCR` SEQUENCE, NOT A TIMESTAMP** — the one change the brief
+asked for after review, and it fixes two real defects in `ZADD <now>`:
+
+1. **Ties.** Equal scores are ordered lexicographically *by member*, so a uuid
+   beginning `0` permanently beats one beginning `f`. In the exact scenario this
+   feature exists for, ties are not an edge case — they are the common case.
+2. **Clock skew.** The timestamp comes from whichever serverless instance took
+   the request. Two instances 30 ms apart silently order a later arrival ahead of
+   an earlier one, and nothing ever reports it.
+
+`INCR` is one counter inside the single Redis every instance shares: a total
+order by construction, no clock consulted. The test proves it — **40 concurrent
+joins produced 40 distinct scores, zero ties.**
+
+**SECTION 5 IS T34's T21.** Capacity 50, 45 admitted, 30 clients polling in the
+same instant against **5 free slots → exactly 5 admitted**, and they were the
+five at the *front*, not five at random. That is what the single Lua script buys:
+the capacity count and the insert cannot be separated.
+
+**AND THE NEGATIVE CONTROL EARNED ITS KEEP TWICE.** Section 11 reruns the same
+scenario with the atomicity removed:
+
+```
+5 slots free, 30 admitted
+final admitted count 75 against a capacity of 50 (overshoot 25)
+```
+
+**The first version of that control passed nothing, and the reason is the more
+interesting finding.** I wrote the non-atomic twin as `rank < capacity - count`,
+mirroring the Lua. It admitted exactly five. A rank is a *stable per-caller
+value*, so when thirty callers read the same count simultaneously, only the five
+whose rank is already below the free-slot count are eligible at all — that
+variant is accidentally self-limiting under a simultaneous burst, and **not in
+general**, because a rank read after the front of the line has been removed is a
+smaller, staler number. It resists exactly the interleaving a test produces and
+fails on the ones production produces, which is the worst property a concurrency
+check can have. The race lives in the *capacity count*, so that is what the
+control now removes the atomicity from.
+
+**THE DESIGN FLAW IN PLAN.md's OWN SKETCH.** The brief describes a separate
+`/api/queue/admit` that "pops the first N users", and does not say who calls it.
+On Vercel there is no long-running process to run a drain loop, and a cron on a
+one-minute floor makes every admission up to sixty seconds late — a live queue
+rendered as a slideshow. Worse: if the drain is the only thing that admits, one
+failed cron run stops the queue dead while every client politely keeps polling.
+
+**Admitting from the poll inverts it: the people waiting ARE the drain loop.**
+The line advances exactly as fast as someone is there to care, there is no
+scheduled job to fail, and capacity is still absolute because the check and the
+insert are one script. Same instinct as T22's lazy expiry — the read does the
+work, so no cron has to. `/api/queue/admit` survives with a narrower and honest
+job: re-issuing a pass to somebody already in `:admitted` who lost the cookie
+(cleared site data, a different browser, an in-app browser handing off). It
+calls a plain `ZSCORE` and **cannot admit** — if it could, it would be a second
+door onto the seat map with no capacity check behind it.
+
+**THE JAM THAT WOULD HAVE BRICKED IT.** Admission is granted when the number of
+people ahead of you is smaller than the number of free slots. Closed tabs left
+in the line forever would fill the front with ghosts — and once there were
+`capacity` of them, **nobody would ever be admitted again**, with Redis
+reporting perfect health throughout. Hence `:seen`, a second sorted set scored
+by last poll, and a bounded sweep of up to 100 stale members per call. Measured:
+a live user queued behind six abandoned spots reached the front after **one**
+poll, and their own spot was not swept, because polling *is* the heartbeat.
+
+**Five keys, one shared TTL, and why that is load-bearing.** `:seq` looks like
+the key that should live forever, and it is the one whose disappearance breaks
+FIFO: a fresh counter restarts at 1, so a new joiner would score *below*
+everyone waiting and jump to the front. It cannot vanish alone — the script
+re-`EXPIRE`s all five on every call, so they expire only after an hour in which
+nobody joined or polled, by which point `:waiting` is gone too and restarting at
+1 is correct rather than merely safe.
+
+**Decisions worth recording:**
+
+1. **The gate is NOT in `src/proxy.ts`**, which the brief offered. Three reasons
+   compound: it needs the event's `status`/`dropAt` and a Postgres query, and the
+   proxy runs on *every* matched request in the app; Next's own docs say proxy
+   "should not be used as a full session management or authorization solution";
+   and a matcher typo there fails **silently** — a failure mode that has already
+   cost this project once. A guard inside the thing it protects cannot be routed
+   around. Same two-layer reasoning as `requireRole()`.
+2. **`POST /api/holds` is gated too, and that is the check that stops the
+   bypass.** Gating only the page would be theatre: the page is a convenience,
+   the endpoint is what takes inventory, and it is one `fetch` away from anyone
+   with a console. The waiting room would otherwise be *worse* than nothing —
+   the people obeying it would be the only ones who lost.
+3. **The event is derived from the seat ids, never from the client.** `/api/holds`
+   receives seats, not an event. Letting the caller name the event would mean the
+   gate checked a *different* drop from the one the seats are in, so naming a
+   quiet event would unlock holds on the busy one.
+4. **A stateless HMAC pass, not a token looked up in Redis.** A Redis-backed
+   token would be revocable, which sounds strictly better and is not: this check
+   runs on every seat-map render and every hold attempt, so it would put a ~90 ms
+   round trip on the hot path of the busiest minute the app ever has. What is
+   given up costs nothing, because an admission *is* a time-boxed pass — it
+   expires on its own; there is no state to revoke.
+5. **`sameSite: "lax"`, not `"strict"`.** Strict withholds the cookie on any
+   cross-site navigation — including the top-level GET that brings a buyer back
+   from Stripe. Under strict, that return carries no pass and the gate sends
+   someone who has just paid into a waiting room.
+6. **`httpOnly`, which is what makes the bypass impossible rather than merely
+   hard.** Script can neither read the pass nor write one. "Edit localStorage to
+   skip the queue" has nothing to edit.
+7. **The active-hold exemption, which the brief was right to insist on.** The
+   pass is 20 minutes; checkout legitimately runs to 31 (`CHECKOUT_WINDOW_MINUTES`
+   plus buffer, matching the Stripe session). That ~10-minute overhang is covered
+   by `hasBusinessInFlight`, *not* by stretching the pass — a token long enough to
+   outlive every checkout stops being a throttle. It grants nothing a user could
+   not already do: both branches require a row only the hold or checkout
+   transaction can create, and both run *behind* the gate. Verified that it
+   expires with the hold, so it cannot become a permanent bypass for anyone who
+   once held a seat.
+8. **The server picks the poll interval, not the client.** Only the server knows
+   how deep the line is: someone two from the front needs a second, someone four
+   thousand back asking every second is ten thousand clients generating ten
+   thousand Redis round trips to learn a number that has barely moved. Ladder is
+   1.5 s / 3 s / 6 s / 12 s, **jittered ±20%** — everybody arrived within the same
+   few seconds, so a fixed interval keeps them in lockstep forever and the load
+   profile is a spike train. Same reasoning as T33's debounced-and-jittered
+   refresh. And a client cannot opt out of it by editing a constant.
+9. **The ETA is measured, not assumed.** `ahead / capacity * ttl` is a lie — it
+   assumes everyone stays the full twenty minutes when most buy in three, so it
+   is wrong by a factor of six in the direction that makes people close the tab.
+   The rate is observed from `:rate` over the last minute, and reports
+   "calculating" rather than extrapolating from one data point.
+10. **Fail OPEN on a Redis outage, loudly.** The queue is a throughput control;
+    every correctness rule lives in Postgres and not one weakens when Redis dies.
+    Failing closed would turn a blip in the component that guards against load
+    into a total outage of ticket sales. The response carries `degraded: true` so
+    a silent fail-open cannot be mistaken for a working queue. The one place that
+    deliberately does *not* fail open is `/api/queue/admit` — there, "Redis is
+    down" becoming "anyone may mint a pass" would be a bypass dressed as
+    resilience.
+11. **Missing config DISABLES the queue rather than opening the gate.** With no
+    `QUEUE_SIGNING_SECRET` the gate would have to trust a cookie it cannot
+    verify, which is a forgery hole wearing a fallback's clothes; locking everyone
+    out instead turns a forgotten env var into an outage. So the queue switches
+    off and the site works without it — and `queue.ts` throws at import in
+    production, so "disabled" is reachable in local development only.
+12. **Keys are caller-proof.** `eventId` goes through `z.uuid()` *before* it
+    reaches `rush:queue:{eventId}:waiting`, because an unvalidated string there is
+    a key-injection primitive; and an id belonging to no event is 404'd, so a
+    caller cannot create unbounded keys in a store billed per key.
+
+**One file split for a reason worth remembering.** `queue-api.ts` and
+`queue-response.ts` were one module until the test imported it and the process
+died on `React.createContext is not a function`. The chain: the request prelude
+needs `getCurrentUser()` → `lib/auth` imports `redirect` from `next/navigation`
+→ that pulls the App Router's React context, which cannot be evaluated under
+`--conditions=react-server`, the flag every verification script here runs with.
+The half with no auth dependency now lives apart, which is also what makes the
+fail-open policy directly assertable instead of only reviewable.
+
+**Not verified by me: the rendered lobby.** Driving a signed-in browser needs a
+session I cannot create, and the Chrome extension was not connected. What *is*
+verified is the harder half — 79 checks including the atomicity proof, the sweep,
+lazy capacity recovery, every forgery class, and the HTTP surface — plus the gate
+end to end over real HTTP: with the drop open, a signed-out request to
+`/events/<id>/seats` answers
+`NEXT_REDIRECT;replace;/login?next=%2Fevents%2F<id>%2Fqueue`, so signing in lands
+straight in the lobby. (`redirect()` arrives as a meta-refresh rather than a 307
+because the layout streams and the shell is already flushed — correct, and worth
+knowing before debugging it with curl.) The signed-in 403 from `/api/holds` is
+covered by decomposition rather than end to end: the test proves `isQueueActive`
+true in-window, `verifyAdmission(undefined)` null, and `hasBusinessInFlight`
+false for a fresh user — which is exactly the conjunction `checkGate` computes.
+
+**To see it:**
+
+```
+npm run drop-now -- <eventId>        # opens the window, clears the queue
+```
+
+With `QUEUE_CAPACITY=1` in `.env.local` (restart `next dev`), the first tab is
+admitted and a second genuinely waits — at the default 50 you would need
+fifty-one browsers to see a queue at all.
+
+**Known limitation, deliberately not fixed here.** An admitted user holds their
+slot for the full 20 minutes even if they buy in two and leave; capacity recovers
+by expiry, not on completion. Releasing the slot from the webhook would be a
+genuine throughput win and a Redis write inside the checkout path — which
+deserves review rather than being slipped in.
+
+**Regression:** hold 20 / expiry 18 / release 18 / checkout 24 / webhook 50 /
+success 18 / ticket 36 / scan 31 / email 37 / realtime 21 / **queue 79**, the T21
+race test (1 winner, 49 conflicts, 0 errors, zero oversells), `check-seed` clean,
+and `typecheck` · `lint` · `build` green with `ƒ Proxy (Middleware)` still
+printed in the route summary.
+
 
 ---
 
@@ -2066,7 +2272,7 @@ Grab a domain (free with the GitHub Student Pack) and point it at Vercel.
 | 6 · Payments | T26–T29 | ☑ |
 | 7 · Tickets & check-in | T30–T32 | ☑ |
 | 8 · Realtime | T33 | ☑ |
-| 9 · Waiting room | T34–T35 | ☐ |
+| 9 · Waiting room | T34–T35 | T34 ☑ · T35 ☐ |
 | 10 · Dashboard | T36–T38 | ☐ |
 | 11 · Design | T39–T41 | ☐ |
 | 12 · Proof | T42–T45 | ☐ |

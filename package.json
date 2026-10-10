@@ -31,6 +31,8 @@
     "realtime-test": "tsx --conditions=react-server --env-file=.env.local scripts/realtime-test.ts",
     "email-test": "tsx --env-file=.env.local scripts/email-test.mts",
     "email-preview": "tsx --env-file=.env.local scripts/email-preview.mts",
+    "queue-test": "tsx --conditions=react-server --env-file=.env.local scripts/queue-test.ts",
+    "drop-now": "tsx --conditions=react-server --env-file=.env.local scripts/drop-now.ts",
     "race-test": "tsx --conditions=react-server --env-file=.env.local scripts/race-test.ts"
   },
   "dependencies": {

@@ -7,7 +7,9 @@ import {
   isLiveHoldViolation,
   type HoldFailure,
 } from "@/db/queries/holds";
+import { getEventForSeats } from "@/db/queries/queue";
 import { getCurrentUser } from "@/lib/auth";
+import { checkGate } from "@/lib/queue-gate";
 import { limitHolds } from "@/lib/rate-limit";
 import { getVerifiedClaims } from "@/lib/supabase/server";
 import { createHoldSchema, MAX_SEATS_PER_USER } from "@/lib/validation/holds";
@@ -186,7 +188,47 @@ export async function POST(request: Request) {
     );
   }
 
-  /* ── 4. THE TRANSACTION ──────────────────────────────────────────────── */
+  /* ── 4. THE QUEUE GATE ───────────────────────────────────────────────────
+   *
+   * ── THIS IS THE CHECK THAT ACTUALLY STOPS THE BYPASS ───────────────────
+   * Gating only the seat-map PAGE would be security theatre. The page is a
+   * convenience; the thing that takes inventory is this endpoint, and it is one
+   * `fetch` away from anyone with a browser console. A user who was redirected
+   * to the lobby could open devtools, POST the seat ids they could read from
+   * the event page, and hold seats while ten thousand people watched a queue -
+   * which would make the waiting room strictly worse than nothing, because the
+   * people obeying it would be the only ones who lost.
+   *
+   * ── WHY IT IS HERE AND NOT EARLIER ────────────────────────────────────
+   * It needs the event, and the event is derived from the validated seat ids -
+   * never from anything the client says, or naming a quiet event would unlock
+   * holds on the busy one. So it has to run after Zod. It still runs before the
+   * transaction, which is the expensive part and the part that takes seats.
+   *
+   * ── AND WHY IT IS A 403 WITH A URL ────────────────────────────────────
+   * Not a redirect: a `fetch` would follow a 307 and try to parse the lobby's
+   * HTML as JSON. The client gets a code it can act on and the exact place to
+   * send the user.
+   */
+  const heldEvent = await getEventForSeats(parsed.data.seatIds);
+  if (heldEvent) {
+    const gate = await checkGate({
+      event: heldEvent,
+      eventId: heldEvent.id,
+      userId: user.id,
+    });
+
+    if (!gate.allowed) {
+      return fail(
+        403,
+        "QUEUE_REQUIRED",
+        "This drop has a waiting room. Join the queue to get your turn.",
+        { queueUrl: `/events/${heldEvent.id}/queue` },
+      );
+    }
+  }
+
+  /* ── 5. THE TRANSACTION ──────────────────────────────────────────────── */
   try {
     const result = await createHold({
       userId: user.id,

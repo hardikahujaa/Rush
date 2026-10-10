@@ -190,3 +190,35 @@ export const scanRateLimiter = redis
       ephemeralCache: new Map(),
     })
   : null;
+
+/**
+ * A FIFTH budget, for the waiting room.
+ *
+ * 30 per 10 seconds. Sized from the poll interval rather than picked: the lobby
+ * polls every 1.5s when a user is near the front, which is about 7 requests per
+ * window, so 30 leaves room for a join, a couple of retries and a second tab
+ * without ever throttling someone who is behaving normally.
+ *
+ * It must not be shared with the hold bucket, and the reason is specific to
+ * this feature: the whole purpose of the queue is to let a user poll steadily
+ * for several minutes. On a shared budget those polls would consume the
+ * allowance for the hold request waiting at the end of them - so the queue
+ * would admit people and then rate-limit them out of buying, which is worse
+ * than having no queue at all.
+ *
+ * What this bucket genuinely guards is cost: every poll is a Redis round trip
+ * running a Lua script, and a client in a tight loop would otherwise turn one
+ * waiting user into thousands of commands a second.
+ */
+export const QUEUE_RATE_LIMIT = 30;
+
+export const queueRateLimiter = redis
+  ? new Ratelimit({
+      redis,
+      limiter: Ratelimit.slidingWindow(QUEUE_RATE_LIMIT, HOLD_RATE_WINDOW),
+      prefix: "rush:ratelimit:queue",
+      analytics: false,
+      timeout: 1000,
+      ephemeralCache: new Map(),
+    })
+  : null;

@@ -7,6 +7,8 @@ import {
   HOLD_RATE_WINDOW_MS,
   holdRateLimiter,
   isRedisConfigured,
+  QUEUE_RATE_LIMIT,
+  queueRateLimiter,
   RELEASE_RATE_LIMIT,
   releaseRateLimiter,
   SCAN_RATE_LIMIT,
@@ -195,6 +197,19 @@ export function limitCheckout(identifier: string): Promise<RateLimitVerdict> {
  */
 export function limitScans(identifier: string): Promise<RateLimitVerdict> {
   return limit(scanRateLimiter, "scan", identifier, SCAN_RATE_LIMIT);
+}
+
+/**
+ * Waiting in the queue: 30 per 10s, its own budget.
+ *
+ * Separate from holds for a reason specific to this feature - the queue exists
+ * to make a user poll steadily for minutes, and on a shared budget those polls
+ * would eat the allowance for the hold request at the end of them. A queue that
+ * admits you and then rate-limits you out of buying would be worse than no
+ * queue.
+ */
+export function limitQueue(identifier: string): Promise<RateLimitVerdict> {
+  return limit(queueRateLimiter, "queue", identifier, QUEUE_RATE_LIMIT);
 }
 
 /** Reported in the startup warning and by the test script. */
