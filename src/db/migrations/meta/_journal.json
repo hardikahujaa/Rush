@@ -43,6 +43,13 @@
       "when": 1787687992490,
       "tag": "0005_realtime_seats",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1791759332459,
+      "tag": "0006_eminent_dreadnoughts",
+      "breakpoints": true
     }
   ]
 }

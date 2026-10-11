@@ -220,6 +220,30 @@ export const holds = pgTable(
       .where(sql`released_at is null`),
     // "Which of my seats are still held?" - the countdown UI asks this.
     index("holds_user_expires").on(t.userId, t.expiresAt),
+    /**
+     * T38. `holds` has the same no-ceiling problem as `orders` - every
+     * abandoned cart leaves a row, nothing ever deletes one - and two shapes
+     * in `db/queries/analytics.ts` hit it with no supporting index:
+     *
+     *   - the funnel's denominator joins `holds` to `seats` on `seat_id`
+     *     alone, which this index's LEADING column already serves;
+     *   - `convertedHoldsCte` (the funnel's numerator, and the average-time
+     *     query) joins on `seat_id`, `user_id` AND a `created_at <=` range -
+     *     exactly this index's full column order.
+     *
+     * One composite index for both, deliberately not two: `(seat_id)` alone
+     * would duplicate this one's leading column for no query that doesn't
+     * already benefit from the wider one, and every extra index is weight
+     * `createHold` pays on every single insert. Measured on a 300k-row
+     * `holds` table (`scripts/query-perf.ts`): the funnel's denominator went
+     * from 65.6ms to 22.3ms (a genuine `Seq Scan on holds` disappeared), and
+     * the hold-to-sale correlation went from 1156.6ms to 1.7ms - not because
+     * it was ever sequentially scanning (it was already using
+     * `holds_user_expires`), but because that index could only narrow by
+     * `user_id`, leaving Postgres to fetch and filter roughly 2 million
+     * candidate rows that this index rules out before a single one is read.
+     */
+    index("holds_seat_user_created").on(t.seatId, t.userId, t.createdAt),
   ],
 );
 
@@ -242,7 +266,20 @@ export const orders = pgTable(
       .notNull()
       .defaultNow(),
   },
-  (t) => [index("orders_user_created").on(t.userId, t.createdAt)],
+  (t) => [
+    index("orders_user_created").on(t.userId, t.createdAt),
+    /**
+     * T38. Every organizer-analytics query in `db/queries/analytics.ts`
+     * filters `orders` by exactly this pair - `WHERE event_id = ? AND status
+     * = 'paid'` - and until this index existed, nothing did: `orders` has no
+     * ceiling on its size (every abandoned checkout leaves a `'pending'` or
+     * `'failed'` row forever), so that filter forced a sequential scan of
+     * the whole table. Measured on a 150k-row `orders` table:
+     * `scripts/query-perf.ts`'s Q1 went from 5.9ms to 0.4ms - roughly 16x,
+     * and the plan's `Seq Scan on orders` disappeared entirely.
+     */
+    index("orders_event_status").on(t.eventId, t.status),
+  ],
 );
 
 /* -- order items --------------------------------------------------------- */

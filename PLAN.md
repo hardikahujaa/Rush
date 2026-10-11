@@ -2548,13 +2548,106 @@ conflicts, 0 errors, zero oversells), `check-seed` clean, `typecheck` · `lint`
 
 ---
 
-### ☐ T38 🟢 — Query performance
+### ☑ T38 🟢 — Query performance
 
 **Prompt:**
 
 > Run EXPLAIN ANALYZE on the three heaviest queries in the app. Show me the output, identify any sequential scans on large tables, add the indexes needed, and show the before/after timings. Explain how to read an EXPLAIN output.
 
 **Commit:** `perf: add indexes based on query plans`
+
+**Done.** Two indexes, migration `0006_eminent_dreadnoughts.sql`. Full
+measurement script at `scripts/query-perf.ts` (`npm run query-perf`); real
+before/after numbers and an EXPLAIN-reading guide are in `README.md`, as the
+brief's own photo-note asked for.
+
+**"HEAVIEST" WAS PICKED BY WHICH TABLES HAVE NO CEILING, NOT BY WHICH QUERY
+LOOKS BUSIEST.** `seats`, `sections`, `order_items` and `tickets` are all
+bounded by the venue's actual seat count — `order_items` can never exceed
+3,168 rows across every event this app will ever sell, because
+`one_sold_seat` permits exactly one row per seat, ever. `holds` and `orders`
+have no such ceiling: every abandoned cart leaves a `holds` row forever (the
+schema's own comment says so), and every failed or abandoned checkout leaves
+an `orders` row in `'pending'`/`'failed'` that nothing deletes. Those are the
+only two tables whose query plans degrade as the app ages — and T36 shipped
+three analytics queries that hit both with no supporting index, deliberately,
+so this task would have something real to find.
+
+**THE DATABASE WAS PADDED BEFORE MEASURING, HONESTLY.** This dev database
+currently has 2 rows in `holds` and 277 in `orders` — a sequential scan over
+either is sub-millisecond regardless of indexing, so a before/after captured
+right now would show nothing. `query-perf.ts` inserts ~300,000 synthetic
+`holds` and ~150,000 synthetic `orders` with one `INSERT ... SELECT FROM
+generate_series` per table (no per-row round trip), spread across the real
+seats/users/events already in the database, so every synthetic row is
+referentially valid. Synthetic orders are `'pending'`/`'failed'` only with no
+`order_items` — they bloat exactly the table a seq scan has to walk without
+changing a single real revenue number. Every synthetic row carries one
+sentinel timestamp (`2000-06-15`, which exists nowhere in real seed data), so
+cleanup is one `DELETE ... WHERE created_at = that` per table — verified
+afterward: `holds` back to 2, `orders` back to 277.
+
+**THE NUMBERS:**
+
+| query | before | after | speedup |
+|---|---|---|---|
+| Q1 — revenue / sales-over-time (`orders` by event) | 5.9 ms | 0.4 ms | 15.8× |
+| Q2 — funnel denominator (`holds`→`seats` by event) | 65.6 ms | 22.3 ms | 2.9× |
+| Q3 — hold↔sale correlation (funnel numerator + avg. time) | 1156.6 ms | 1.7 ms | **693×** |
+
+**Q3 IS THE INTERESTING ONE, AND THE HONEST VERSION OF THE STORY MATTERS.**
+My own script's `hasSeqScan` check reported `false` for Q3's "before" plan —
+correctly. It genuinely was **not** a sequential scan: Postgres was already
+using the existing `holds_user_expires` index, narrowing by `user_id`. The
+problem was that this index couldn't narrow any further — `created_at <=
+o.created_at` and the `seat_id` match both had to be checked by a `Filter`
+*after* the index handed back every row for that user, and the plan shows why
+that was catastrophic: a `Nested Loop Left Join`, 288 loops (one per
+order_item), each pulling back candidate holds and removing them with a join
+filter — **`Rows Removed by Join Filter: 1,963,231`**. Almost two million rows
+fetched and discarded to find 664 real matches. The composite index that
+covers `(seat_id, user_id, created_at)` turns that into an exact index
+condition per loop instead of a fetch-then-filter, which is where 693× comes
+from. The lesson worth keeping: a plan with no `Seq Scan` line can still be
+the slowest query in the app, if the index it *is* using doesn't match the
+join tightly enough.
+
+**ONE COMPOSITE INDEX PER TABLE, NOT THREE NARROW ONES.** Three query shapes,
+two indexes — `holds_seat_user_created`'s leading column (`seat_id`) alone
+already serves Q2's plain join to `seats`; the full three-column order serves
+Q3. A separate `holds(seat_id)` index would duplicate that leading column for
+no query this app runs, while still costing `createHold` extra maintenance
+work on every single insert during a drop — every index is write-time weight,
+not a free read-time asset, and `holds` is exactly the table that gets
+written hardest during the traffic this whole project exists to survive.
+
+**Verification order, to formalize correctly.** The two indexes were first
+created ad hoc (`CREATE INDEX IF NOT EXISTS`) inside the benchmark script, to
+measure the after-state on the SAME padded data as the before-state. They were
+then dropped, added properly to `src/db/schema.ts`, and migrated through
+`drizzle-kit generate` + `db:migrate` — the project's normal schema-change
+path for every prior migration (0000–0005). `query-perf.ts`'s own cleanup now
+drops any ad-hoc copy on every run, so re-running it later for a fresh
+demonstration can never collide with the migrated, permanent version.
+
+**Not touched, and why.** The seat map's own per-seat subqueries
+(`seatStatusExpr`/`liveHoldExpiry` in `availability.ts`) run three correlated
+lookups per seat and could plausibly be merged into one — but every one of
+them is already backed by an existing T20/T28 constraint index
+(`one_sold_seat`, the partial `one_live_hold_per_seat`), so there was no
+sequential scan to find there, and merging the subqueries would be a query
+*rewrite*, not an index addition. T38's brief is explicitly "add the indexes
+needed" — rewriting a battle-tested query that already has zero test failures
+behind it is a different task with a different risk profile, and is left as
+an observation rather than a change.
+
+**Regression:** hold 20 / expiry 18 / release 18 / checkout 24 / webhook 50 /
+success 18 / ticket 36 / scan 31 / email 37 / realtime 21 / queue 79 /
+queue-ui 48 / analytics 27 / dashboard 22, the T21 race test (1 winner, 49
+conflicts, 0 errors, zero oversells), `check-seed` clean, `typecheck` · `lint`
+· `build` green — all re-run AFTER the migration, against the restored
+production-scale (not synthetically padded) database.
+
 
 > 📸 Before/after numbers go in your README.
 
@@ -2717,7 +2810,7 @@ Grab a domain (free with the GitHub Student Pack) and point it at Vercel.
 | 7 · Tickets & check-in | T30–T32 | ☑ |
 | 8 · Realtime | T33 | ☑ |
 | 9 · Waiting room | T34–T35 | ☑ |
-| 10 · Dashboard | T36–T38 | T36–T37 ☑ · T38 ☐ |
+| 10 · Dashboard | T36–T38 | ☑ |
 | 11 · Design | T39–T41 | ☐ |
 | 12 · Proof | T42–T45 | ☐ |
 | 13 · Ship | T46–T50 | ☐ |
