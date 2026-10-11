@@ -2422,13 +2422,129 @@ green.
 
 ---
 
-### ☐ T37 🟡 — Dashboard UI
+### ☑ T37 🟡 — Dashboard UI
 
 **Prompt:**
 
 > Build `/organizer/events/[id]` with animated stat cards (revenue, tickets sold, sell-through, check-ins), a Recharts area chart of sales over time, a bar chart of sell-through by section, and a live-updating list of recent orders. Numbers should count up on mount.
 
 **Commit:** `feat: organizer dashboard`
+
+**Done.** `/organizer/events/[id]` — four animated stat cards, a Recharts
+cumulative-revenue area chart, a sell-through bar chart, and a polling recent-
+orders feed. `src/components/organizer/` holds seven files; the page itself
+stays a server component that fetches once and hands static data to client
+leaves. `npm run dashboard-test` — **22 checks** — covers the three reads this
+task needed beyond T36's original five; T36's own 27 already cover the other
+five end to end.
+
+**THREE READS T36 DIDN'T PRODUCE, ADDED TO THE SAME FILE.** The brief's four
+stat cards need revenue, tickets sold, sell-through and **check-ins** — nothing
+in T36 counts a scanned ticket. `getCheckInStats` does
+(`count(t.checked_in_at)` against `count(*)`, T31's own column, read-only). The
+header needs a title/venue/city nothing in T36 carries — `getEventHeader` does,
+through the *same* `ownedEvent` gate rather than reusing `getEventById` (which
+computes full seat-map availability nobody here reads, and checks no
+ownership at all — it's the public event page's query). And "live-updating
+list of recent orders" needs a list — `getRecentOrders` does, with its own
+route handler, since it's the one panel polled from the client rather than
+read once by the server component.
+
+**WHY RECENT ORDERS POLLS INSTEAD OF USING T33'S REALTIME.** `seats` is the
+only table in `supabase_realtime`'s publication. T33's migration explicitly
+revoked broad grants and added exactly one `SELECT` policy, because a `holds`
+row carries `user_id` and an `orders` row carries both an identity and a sum
+of money — the opposite of what a public socket should broadcast. Making this
+list "live" by publishing `orders` would be a security-relevant schema change
+this task never asked for. `GET /api/organizer/events/[id]/recent-orders`,
+polled every 15s, is the same read pulled instead of pushed — same ownership
+check, same data, nothing new exposed over a socket.
+
+**SIX INDEPENDENT OWNERSHIP CHECKS ON ONE PAGE LOAD, AND THAT IS DELIBERATE,
+NOT AN OVERSIGHT.** The page could fetch the event once, confirm ownership,
+and trust that for the other five queries — six round trips to the same
+`events` row where one would do. It doesn't, because every function in
+`analytics.ts` re-verifies for itself, which means the property "an organizer
+can only read their own event's numbers" holds no matter which function is
+called from where, forever — including from a future caller that forgets the
+page-level gate exists. A single shared "load, then trust" step is exactly the
+kind of divergence T36's own module note warns about. `Promise.all` makes the
+six concurrent, so the cost is one round trip's latency, not six.
+
+**THE COUNT-UP USES NO NEW DEPENDENCY.** Framer Motion already drives this
+project's other animated numbers — the split-flap digits in
+`components/home/seat-counter.tsx`, the queue lobby's ticker (T35). `CountUp`
+drives a `useMotionValue` through `animate()` rather than `setState`, so four
+stat cards ticking from 0 to their target cost zero React re-renders per
+frame — `animate()` writes the motion value directly and `motion.span` paints
+it outside the reconciler. A `react-countup` package would have reached the
+same visual result through a second number-animation library doing what one
+already installed does.
+
+It only plays once per mount, not once per render: a `useRef` remembers
+whether this instance has already animated, so a parent revalidating the page
+with a slightly higher number does not replay the whole count-up — it snaps
+the figure to its new value, which is the honest behaviour for a live number
+the user is still looking at.
+
+**Decisions worth recording:**
+
+1. **The area chart draws the CUMULATIVE total, not the per-hour bar.** T36's
+   `getSalesOverTime` returns both; a single dominant spike in the first five
+   minutes of a drop would dwarf every later hour on the same per-hour axis
+   and flatten the rest of the line into noise. The cumulative curve answers
+   the question the screen exists for — is the room filling — and it is also
+   the self-consistency invariant `analytics-test.ts` already checks: the
+   chart's last point and `getEventRevenue`'s total are mathematically
+   guaranteed to agree, because both are produced by the same window-function
+   pass.
+2. **The sell-through bars are ordered by price, not by percentage.**
+   `getSectionSellThrough`'s own `ORDER BY price_cents DESC` is preserved end
+   to end, so the chart reads Front-Middle-Rear top to bottom, matching the
+   seat map's legend — sorting by the metric instead would reorder the bars
+   every time a single sale landed, which is a chart that cannot be read at a
+   glance twice in a row.
+3. **recharts installed clean.** Checked before committing to it: version
+   3.10.1 declares `react: ^19.0.0` in its peer deps, and a full `npm audit`
+   diff shows it and its dependency tree introduced zero new advisories — the
+   25 pre-existing findings (one critical: Next.js itself) belong entirely to
+   packages already in the tree before this task touched anything.
+4. **`getRecentOrders`'s route handler uses `getCurrentUser()`, not
+   `requireRole()`** — the same reasoning as `/api/holds`: `requireRole`
+   throws `NEXT_REDIRECT`, which a polling `fetch()` would follow into HTML
+   and fail to parse as JSON.
+5. **New rows animate in; rows already on screen do not re-animate.**
+   `AnimatePresence` is keyed on `orderId`, so a row still present across a
+   15-second poll is the *same* element to React and is left alone — without
+   the key, every poll would replay the drop-in for the whole list, reading as
+   the panel flickering rather than new sales arriving.
+6. **The stale fixture-price bug from T36 did not recur here**, because
+   `dashboard-test.ts`'s fixture fires `amount_total: order.totalCents` from
+   the start rather than copying a lazy default a second time.
+
+**Not verified by me: the rendered appearance** — the charts' colours, the
+count-up's easing, the stat grid's responsive wrap at the sm/lg breakpoints,
+the recent-orders panel's drop-in animation. Same honest position as T33–T35:
+the Chrome extension was not connected and this page only renders for a
+signed-in organizer who owns a specific event. What *is* verified end to end:
+the page's gate over real HTTP — a signed-out request to `/organizer/events/
+<uuid>` returns a `307` to `/login?next=%2Forganizer%2Fevents%2F<uuid>` before
+the page body ever runs, proving `src/proxy.ts`'s existing `/organizer` prefix
+rule already covers the nested route with no proxy change needed — plus 22
+checks on every number the page renders and the recent-orders route's own
+401/404 behaviour.
+
+**To see it:** sign in as the seeded organizer, visit `/organizer`, then
+navigate to `/organizer/events/<a live event's id>` directly (there is no link
+from `/organizer` yet — T37's brief was the dashboard page itself, not the
+list page that would link to it).
+
+**Regression:** hold 20 / expiry 18 / release 18 / checkout 24 / webhook 50 /
+success 18 / ticket 36 / scan 31 / email 37 / realtime 21 / queue 79 /
+queue-ui 48 / analytics 27 / **dashboard 22**, the T21 race test (1 winner, 49
+conflicts, 0 errors, zero oversells), `check-seed` clean, `typecheck` · `lint`
+· `build` green.
+
 
 ---
 
@@ -2601,7 +2717,7 @@ Grab a domain (free with the GitHub Student Pack) and point it at Vercel.
 | 7 · Tickets & check-in | T30–T32 | ☑ |
 | 8 · Realtime | T33 | ☑ |
 | 9 · Waiting room | T34–T35 | ☑ |
-| 10 · Dashboard | T36–T38 | T36 ☑ · T37–T38 ☐ |
+| 10 · Dashboard | T36–T38 | T36–T37 ☑ · T38 ☐ |
 | 11 · Design | T39–T41 | ☐ |
 | 12 · Proof | T42–T45 | ☐ |
 | 13 · Ship | T46–T50 | ☐ |

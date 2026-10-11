@@ -66,6 +66,48 @@ async function ownedEvent(eventId: string, organizerId: string): Promise<OwnedEv
   return rows[0] ?? null;
 }
 
+/* ── 0. the dashboard header ───────────────────────────────────────────── */
+
+export type EventHeader = {
+  title: string;
+  venue: string;
+  city: string;
+  startsAt: Date;
+};
+
+/**
+ * Title, venue and start time for the dashboard's own header.
+ *
+ * A separate, minimal query rather than reusing `getEventById` from
+ * `events.ts` - that function computes full per-section live availability for
+ * the SEAT MAP, which this page does not render, and it does not check
+ * organizer ownership at all (it is used for the public event page, where
+ * anyone may look). Reusing it here would mean either paying for availability
+ * math nobody reads, or trusting a second, independent ownership check to stay
+ * in sync with the one in `ownedEvent` above. This goes through the same
+ * `ownedEvent` gate as every other function in this file instead.
+ */
+export async function getEventHeader(
+  eventId: string,
+  organizerId: string,
+): Promise<EventHeader | null> {
+  if (!(await ownedEvent(eventId, organizerId))) return null;
+
+  const rows = await db.execute<{ title: string; venue: string; city: string; starts_at: string }>(
+    sql`
+      select e.title as title, v.name as venue, v.city as city, e.starts_at as starts_at
+      from events e
+      join venues v on v.id = e.venue_id
+      where e.id = ${eventId}
+      limit 1
+    `,
+  );
+
+  const row = rows[0];
+  if (!row) return null;
+  return { title: row.title, venue: row.venue, city: row.city, startsAt: new Date(row.starts_at) };
+}
+
 /**
  * The shared correlation, as a raw SQL fragment rather than a Drizzle query
  * builder expression - it has to be embeddable as a CTE inside two different
@@ -424,4 +466,116 @@ export async function getAvgHoldToPurchase(
     avgSeconds: avg === null || avg === undefined ? null : Number(avg),
     sampleSize: Number(row?.sample_size ?? 0),
   };
+}
+
+/* ── 6. check-ins (T37's fourth stat card; not one of T36's named five) ──── */
+
+export type CheckInStats = {
+  ticketsSold: number;
+  checkedIn: number;
+};
+
+/**
+ * How many tickets exist for this event, and how many have been scanned.
+ *
+ * Not in T36's original list of five - the dashboard brief (T37) asks for a
+ * "check-ins" stat card, and nothing above produces that number.
+ * `tickets.checked_in_at` is T31's own compare-and-set column; this reads it,
+ * never writes it.
+ *
+ * `ticketsSold` is also derivable by summing `getSectionSellThrough`'s
+ * `soldSeats`, but a dedicated count is one query instead of a client-side
+ * reduction over five section rows, and it is the natural denominator to put
+ * right next to the numerator it is paired with.
+ */
+export async function getCheckInStats(
+  eventId: string,
+  organizerId: string,
+): Promise<CheckInStats | null> {
+  if (!(await ownedEvent(eventId, organizerId))) return null;
+
+  const rows = await db.execute<{ tickets_sold: string; checked_in: string }>(sql`
+    select
+      count(*)::bigint as tickets_sold,
+      count(t.checked_in_at)::bigint as checked_in
+    from tickets t
+    join orders o on o.id = t.order_id
+    where o.event_id = ${eventId}
+      and o.status = 'paid'
+  `);
+
+  const row = rows[0];
+  return {
+    ticketsSold: Number(row?.tickets_sold ?? 0),
+    checkedIn: Number(row?.checked_in ?? 0),
+  };
+}
+
+/* ── 7. recent orders (T37's live-updating list) ─────────────────────────── */
+
+export type RecentOrder = {
+  orderId: string;
+  buyerEmail: string;
+  seatCount: number;
+  totalCents: number;
+  createdAt: Date;
+};
+
+/**
+ * The most recent paid orders, newest first.
+ *
+ * ── WHY THIS IS POLLED, NOT PUSHED OVER REALTIME ───────────────────────────
+ * T33's `supabase_realtime` publication deliberately includes `seats` and
+ * NOTHING else - migration 0005 revokes broad grants specifically because a
+ * `holds` row carries `user_id` and an `orders` row carries both an identity
+ * and a sum of money. Adding `orders` to that publication to make this list
+ * "live" would be a security-relevant schema change this task does not ask
+ * for and should not casually make. `GET /api/organizer/events/[id]/
+ * recent-orders` exists so the dashboard can poll this instead - the same
+ * read, the same ownership check, just pulled rather than pushed.
+ *
+ * `seatCount` comes from counting `order_items` per order rather than reading
+ * `orders.total_cents` and dividing - total is a sum of possibly different
+ * section prices, so dividing it by a price would be wrong the moment an
+ * order mixes tiers.
+ */
+export async function getRecentOrders(
+  eventId: string,
+  organizerId: string,
+  limit = 10,
+): Promise<RecentOrder[] | null> {
+  if (!(await ownedEvent(eventId, organizerId))) return null;
+
+  const rows = await db.execute<{
+    order_id: string;
+    buyer_email: string;
+    seat_count: string;
+    total_cents: number;
+    created_at: string;
+  }>(sql`
+    select
+      o.id as order_id,
+      u.email as buyer_email,
+      count(oi.id)::bigint as seat_count,
+      o.total_cents as total_cents,
+      o.created_at as created_at
+    from orders o
+    join users u on u.id = o.user_id
+    join order_items oi on oi.order_id = o.id
+    where o.event_id = ${eventId}
+      and o.status = 'paid'
+    group by o.id, u.email, o.total_cents, o.created_at
+    order by o.created_at desc
+    limit ${limit}
+  `);
+
+  return rows.map((row) => ({
+    orderId: row.order_id,
+    buyerEmail: row.buyer_email,
+    seatCount: Number(row.seat_count),
+    totalCents: row.total_cents,
+    /* `created_at` arrives as a string through `db.execute` - it bypasses
+       Drizzle's column mapping, the same trap noted elsewhere in this file. */
+    createdAt: new Date(row.created_at),
+  }));
 }
