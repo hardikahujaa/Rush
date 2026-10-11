@@ -6,9 +6,8 @@ import { ArrowLeft, CalendarDays, MapPin } from "lucide-react";
 import { getCurrentUser } from "@/lib/auth";
 import { findEvent } from "@/lib/event-lookup";
 import { isQueueActive } from "@/lib/queue";
+import { QueueLobby } from "@/components/queue/queue-lobby";
 import { checkGate } from "@/lib/queue-gate";
-
-import { QueueLobby } from "./queue-lobby";
 
 type Props = { params: Promise<{ id: string }> };
 
@@ -124,31 +123,34 @@ export default async function QueuePage({ params }: Props) {
       </div>
 
       {/*
-        WHY THE RULES ARE STATED, AND NOT JUST ENFORCED.
+        WHY ANY OF THIS IS STATED, AND NOT JUST ENFORCED.
 
-        Everything below is already true in the code - one place per account,
-        refreshing is safe, tabs do not help. Saying so is not decoration: an
-        unexplained queue is the single most reliable way to make someone start
-        hammering refresh and opening tabs, which is exactly the load the queue
-        exists to prevent. Telling them it cannot work is cheaper than
-        absorbing the attempt.
+        Both facts below are already true in the code. Saying them is not
+        decoration: an unexplained queue is the most reliable way to make
+        someone start hammering refresh and opening tabs, which is exactly the
+        load the queue exists to absorb. Telling them it cannot work is cheaper
+        than absorbing the attempt.
+
+        T35 TRIMMED THIS LIST. It used to carry three bullets, two of which the
+        rotating ticker inside the panel now says - so the page stated the same
+        rules twice, eight lines apart, and the repetition read as padding on a
+        screen where every line is being scrutinised. What is left is the pair
+        the ticker does NOT rotate: that refreshing is safe (the ticker only
+        says it will not help), and the concrete consequence of leaving.
       */}
       <ul className="mx-auto mt-8 max-w-sm space-y-2.5 text-xs leading-relaxed text-muted-foreground">
         <li className="flex gap-2.5">
           <span aria-hidden="true" className="mt-[7px] size-1 shrink-0 rounded-full bg-gold/60" />
-          Your place is held against your account, so refreshing this page will
-          not lose it — and will not move you up.
+          Your place is held against your account, not this tab — so refreshing
+          is safe.
         </li>
         <li className="flex gap-2.5">
           <span aria-hidden="true" className="mt-[7px] size-1 shrink-0 rounded-full bg-gold/60" />
-          Everyone is admitted strictly in the order they arrived.
-        </li>
-        <li className="flex gap-2.5">
-          <span aria-hidden="true" className="mt-[7px] size-1 shrink-0 rounded-full bg-gold/60" />
-          Leave this tab open. If it is closed for more than a minute your spot
-          is given to the next person in line.
+          If this tab is closed for more than a minute, your spot goes to the
+          next person in line.
         </li>
       </ul>
+
     </main>
   );
 }

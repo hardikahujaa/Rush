@@ -2072,13 +2072,215 @@ printed in the route summary.
 
 ---
 
-### ☐ T35 🟡 — Waiting room UI
+### ☑ T35 🟡 — Waiting room UI
 
 **Prompt:**
 
 > Build the waiting room page: large animated number ticker counting down your queue position, an animated progress bar, estimated wait time, rotating reassurance messages, and an auto-redirect the instant you're admitted. Make it feel tense and premium — this is the page people screenshot.
 
 **Commit:** `feat: waiting room UI`
+
+**Done.** T34's lobby was one 384-line client component sitting beside the route.
+T35 splits it into `src/components/queue/` — a hook that owns every piece of
+state and seven children that are pure functions of props — and adds the ticker,
+the honest heartbeat, and the admission handoff. `npm run queue-ui-test` —
+**48 checks**, no database, no Redis, no dev server.
+
+```
+app/(site)/events/[id]/queue/page.tsx      server · gate + chrome
+└── components/queue/queue-lobby.tsx       "use client" — the ONLY stateful node
+    │   useQueuePosition(eventId)          ← all network + the phase machine
+    │   useSecondTick()                    ← ONE subscription, value passed down
+    ├── <AdmissionCurtain/>                the handoff
+    ├── <PositionTicker/>                  per-digit split-flap
+    ├── <WaitEstimate/>                    decaying ETA + heartbeat
+    ├── <QueueProgress/>                   spring-settling bar
+    ├── <StatusTicker/>                    rotating copy
+    └── <QueueStats/>                      in line · buying now
+```
+
+**Pure frontend — no API change, no Redis change.** T34's payload already carried
+everything (`ahead`, `waitingTotal`, `admittedCount`, `capacity`, `etaSeconds`,
+`pollAfterMs`), which is a decent sign the T34 contract was drawn at the right
+boundary. It also keeps this task's blast radius inside one new folder.
+
+**THE COPY TELLS THE TRUTH, AND THAT WAS THE ONE REAL DECISION.** The brief asked
+for a ticker that "creates the illusion of constant background activity" —
+`Securing connection…`, `Verifying inventory…` — cycling while, between polls,
+the server does nothing at all.
+
+This project had already settled that question in the opposite direction.
+`components/home/seat-counter.tsx` used to decrement its own number on a random
+timer; it was deleted, with the reasoning written into the file: a number that
+moves regardless of whether anyone is buying is manufactured pressure,
+*"precisely the dark pattern the honest no-oversell backend exists to avoid."*
+A line claiming to verify inventory when no request is open is the same move in
+text form — and the single property that makes RUSH defensible is that it never
+lies about state.
+
+The illusion also turned out to be unnecessary, which is the useful part. Four
+sources of continuous motion, every one driven by something real:
+
+| source | driven by | claims |
+|---|---|---|
+| ETA decays every second between polls | `useSecondTick` + the measured rate | true |
+| `checked 4s ago` → `checking now…` | real request timestamps | true |
+| bar spring-settles on each new position | real data | true |
+| `.live-pulse` sliver travelling the panel edge | decoration | nothing |
+
+So the copy splits into a **live slot** (slot 0: `Reconnecting…` / `Checking your
+place…` / `You are in line.`, whichever is true at the moment it is on screen)
+and **standing facts** that cannot go stale: arrival order is exact because the
+score is a Redis `INCR` sequence; seats return when a checkout expires because
+that is T22; refreshing will not move you up because the place is held against
+the account. The test asserts no line matches `/verif\w* inventory/i` or
+`/securing/i`, so the decision cannot be quietly reverted later.
+
+**THE ROTATION OWNS NO TIMER AND NO STATE.** The obvious ticker is `useState` +
+`setInterval` in an effect, which is exactly the shape React 19's
+`set-state-in-effect` rule refuses — it has now fired five times in this
+project. Instead the index is *derived*:
+
+```
+index = Math.floor(tick / ROTATE_SECONDS) % messages.length
+```
+
+No timer to clean up, no state to desync, and the ticker cannot drift away from
+the ETA two lines below it because both read the same tick. Which forces an
+invariant: **`queueMessages` must always return exactly `TICKER_SLOTS` entries.**
+If the length varied with state, the modulo would change with it and the ticker
+would jump to an unrelated line mid-cycle — an intermittent glitch nobody could
+reproduce by hand. The function throws if a sixth line is ever added, and the
+test checks the length across 24 state combinations.
+
+**HYDRATION.** `useSecondTick` returns **0 on the server**, and `0` means "not
+hydrated" throughout, never the epoch. So `tickerIndex(0) === 0`, `decayEta`
+returns its undecayed input, and `formatHeartbeat` returns null rather than
+"checked 56 years ago" — server HTML and first client paint are identical. The
+test has a section for exactly this, because the failure mode is invisible in
+development: the server and client clocks agree on one machine, so a mismatch
+would only ever appear in production.
+
+Nothing calls `Date.now()` or `Math.random()` during render. That is free here,
+because T34 deliberately put the poll jitter on the *server* (`pollAfterMs`), so
+the client has no randomness to leak into markup at all.
+
+**THE HANDOFF.** `waiting → admitting → (1.1s) → navigate`. The subtle part is
+not the delay, it is that **the poll loop is cancelled the instant `admitting`
+begins**: without it, a request already in flight resolves 200ms later, calls
+`setSnap`, and pushes the waiting UI back on screen underneath a curtain that is
+mid-animation. A closure flag — not a `useRef`, since React 19 forbids writing
+refs during render — makes `arrive()` idempotent so a second `admitted` payload
+cannot restart the timer or fire a second `router.replace`. The cleanup clears
+both timers, so unmounting mid-beat does not navigate a page the user has left.
+
+PLAN.md asks for a redirect "the instant you're admitted" and the brief asked for
+a deliberate beat. **The brief is right and the deviation is recorded here:**
+after a wait that may have run for minutes, an instant snap reads as a crash —
+the user never sees that they succeeded, only that the thing they were watching
+vanished. Nothing depends on the pause for correctness: the pass is already in
+the cookie jar, and the curtain carries a real link, so a navigation that never
+fires leaves the user one tap from the seats rather than stranded.
+
+**Decisions worth recording:**
+
+1. **`.live-pulse` instead of a new shimmer.** The ambient motion this screen
+   needed already existed in `globals.css` — a champagne sliver travelling a
+   card's edge on a 6s loop, built for T17's event cards, already switched off
+   under `prefers-reduced-motion`. It is CSS, so it costs no JavaScript and keeps
+   moving while React is busy, which is precisely the property you want from the
+   one element proving the page is not frozen.
+2. **`useSecondTick()` is subscribed ONCE, at the top.** Its `subscribe` starts
+   an interval per *consumer*, so calling it in `StatusTicker`, `WaitEstimate`
+   and the heartbeat would run three timers to read one clock. T33 settled this
+   convention with 288 seat buttons; `tick` is passed down as a prop.
+3. **The ETA decay is CAPPED at 15s**, just past the longest interval T34 hands
+   out. An uncapped countdown is a liar: with polls failing it would march to
+   "any moment now" while the user is four hundred back. Past the cap it simply
+   stops, and the reconnecting notice explains why. Reaching 0 is therefore only
+   possible when the estimate was already under one poll interval — i.e. when
+   the front genuinely is moments away.
+4. **The progress denominator is the user's own starting position, not
+   `waitingTotal`.** The brief says `(total - position) / total`, and
+   `waitingTotal` is the wrong `total`: people keep joining *behind* you, so the
+   denominator grows while the numerator does not and the bar slides backwards
+   while you are moving forwards. `peak` only ever grows, so the ratio is
+   monotonic by construction — asserted over a 500-place journey.
+5. **Per-digit split-flap, keyed by place from the RIGHT.** `seat-counter.tsx`
+   animates the whole number, which is right at 11px and wrong at 72px —
+   `412 → 411` would throw all three digits in the air to change one. Keying by
+   place-from-the-right rather than by array index keeps the units column the
+   units column, so `100 → 99` animates only the vanishing hundreds slot
+   instead of renumbering everything.
+6. **Green is confined to the check badge.** Obsidian & Champagne has no green;
+   `#16A34A` exists in exactly one other file, `scan/gate-scanner.tsx`, where a
+   full-bleed takeover is correct because a bouncer reads it at arm's length in
+   a dark venue. Here the badge borrows it and the headline, bar and bloom stay
+   champagne, so the screen still belongs to the buyer flow. Meaning is never
+   carried by colour alone — it is a check mark, and the headline says it in
+   words.
+7. **Two layout shifts fixed, both T34's.** The ETA line used to mount and
+   unmount between `calculating…` and a value; the progress bar rendered only
+   once `peak > 0`, so it *arrived* a second in and pushed everything down. Both
+   now have reserved `min-h` and are always mounted — only content swaps, via
+   `AnimatePresence mode="wait"`. The bar carries a 2% fill floor so "no data
+   yet" and "no progress yet" differ by a sliver of gold rather than an element
+   appearing.
+8. **`AnimatePresence` keys on the rendered TEXT, not the raw seconds.** The
+   estimate changes every second but its bucket changes every minute or so;
+   keying on seconds would re-animate an identical string sixty times a minute.
+9. **One polite live region, and the ticker is `aria-hidden`.** A region
+   changing every four seconds forever is not information, it is an
+   interruption — the user would be unable to hear the position they came for.
+   So the rotating copy and the per-second heartbeat are both hidden, and a
+   single `sr-only` `aria-live="polite"` region announces position changes only.
+   Same decision `seat-counter.tsx` documents for its fourteen badges. The
+   curtain is the one `assertive` region in the lobby, because arriving at the
+   front is the one moment worth interrupting for.
+10. **`useReducedMotion` gates every addition**: the ticker crossfades instead of
+    sliding, digits fade instead of flipping, the bar jumps, the bloom sits
+    still, and `.live-pulse` was already handled in CSS.
+11. **A spring for the bar, not a CSS transition.** T33 used CSS transitions for
+    seat colours because 288 instances of a JS animation is a render storm. That
+    calculus does not apply to one bar changing a few times a minute, and a
+    spring settle is what makes the movement read as a mechanism rather than a
+    meter.
+12. **The page's static rule list was trimmed from three bullets to two.** The
+    ticker now rotates two of them, so the page was stating the same rules twice
+    eight lines apart, and the repetition read as padding on a screen where
+    every line is scrutinised. What is left is the pair the ticker does not
+    carry: that refreshing is *safe* (the ticker only says it will not help),
+    and the concrete consequence of closing the tab.
+
+**Not verified by me: the rendered appearance.** Same honest position as T33 and
+T34 — the lobby only renders for a signed-in user mid-drop, and the Chrome
+extension is not connected, so I have not seen it move. I also did not build an
+SSR smoke test for it: `QueueLobby` reaches `next/navigation`, whose `useRouter`
+throws without an App Router provider, so rendering it standalone would be
+testing a mock rather than the component.
+
+What *is* verified: 48 checks on the extracted logic — the hydration contract,
+the rotation invariant, the decay cap, monotonic progress, the "no false claims"
+assertions — plus `typecheck` · `lint` · `build` green, with **no
+`set-state-in-effect` and no `react-hooks/refs` violations**, which were the two
+rules this screen was most likely to break. And the gate still answers correctly
+after the move: with the drop open, signed-out requests to both
+`/events/<id>/queue` and `/events/<id>/seats` return
+`NEXT_REDIRECT;replace;/login?next=%2Fevents%2F<id>%2Fqueue`.
+
+**To see it:** `npm run drop-now -- <eventId>`, with `QUEUE_CAPACITY=1` in
+`.env.local` and `next dev` restarted — then the first tab is admitted and a
+second genuinely waits. The states worth looking at are: joining, waiting with
+`calculating…` before the first admission, waiting with a decaying estimate, the
+reconnecting notice (kill the network for five seconds), `You are next`, and the
+curtain.
+
+**Regression:** hold 20 / expiry 18 / release 18 / checkout 24 / webhook 50 /
+success 18 / ticket 36 / scan 31 / email 37 / realtime 21 / queue 79 /
+**queue-ui 48**, the T21 race test (1 winner, 49 conflicts, 0 errors, zero
+oversells), `check-seed` clean, and `ƒ Proxy (Middleware)` still printed in the
+route summary.
+
 
 ---
 
@@ -2272,7 +2474,7 @@ Grab a domain (free with the GitHub Student Pack) and point it at Vercel.
 | 6 · Payments | T26–T29 | ☑ |
 | 7 · Tickets & check-in | T30–T32 | ☑ |
 | 8 · Realtime | T33 | ☑ |
-| 9 · Waiting room | T34–T35 | T34 ☑ · T35 ☐ |
+| 9 · Waiting room | T34–T35 | ☑ |
 | 10 · Dashboard | T36–T38 | ☐ |
 | 11 · Design | T39–T41 | ☐ |
 | 12 · Proof | T42–T45 | ☐ |
