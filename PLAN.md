@@ -2286,13 +2286,139 @@ route summary.
 
 ## PHASE 10 — Organizer dashboard
 
-### ☐ T36 🔴 — Analytics queries
+### ☑ T36 🔴 — Analytics queries
 
 **Prompt:**
 
 > Create `src/db/queries/analytics.ts` with SQL (via Drizzle) for: total revenue per event, sell-through percentage per section, sales over time bucketed by hour, a conversion funnel (holds created → holds converted to paid), and average time from hold to purchase. Use window functions where appropriate. Explain each query.
 
 **Commit:** `feat: analytics queries`
+
+**Done.** `src/db/queries/analytics.ts` — five functions, each scoped to one
+event: `getEventRevenue`, `getSectionSellThrough`, `getSalesOverTime`,
+`getConversionFunnel`, `getAvgHoldToPurchase`. `npm run analytics-test` —
+**27 checks**, against the real fulfilment path (real `createHold`, real
+`createPendingOrder`, a real signed Stripe webhook — nothing mocked).
+
+**AN AUTHORIZATION GAP THE BRIEF DIDN'T MENTION, CLOSED ANYWAY.** `/organizer`
+currently calls `requireRole("organizer")` and nothing else — which proves a
+visitor IS an organizer, never that they own the event whose revenue they are
+about to read. `events.organizer_id` has existed since T1-era schema and
+nothing has ever queried it. Every function here now takes `(eventId,
+organizerId)` and resolves the event through BOTH before running a single
+report query, returning `null` — indistinguishable from "doesn't exist" — for
+an event belonging to someone else. Same reasoning as `/orders/[id]` returning
+`notFound()` for a stranger's order rather than a 403 that confirms the id is
+real. Tested explicitly: all five functions refused a wrong-organizer uuid.
+
+**"PURCHASED AT" USES NO NEW COLUMN.** `orders` has `created_at` (when checkout
+*started*) and `status`, nothing timestamping the moment it became `'paid'`.
+But `webhooks.ts`'s fulfilment transaction sets that status, creates
+`order_items`/`tickets`, AND releases the converting hold —
+`holds.released_at = now()` — all in the same transaction. So a converted
+hold's own `released_at` IS the purchase instant, to the same precision as
+everything else that transaction wrote. `getAvgHoldToPurchase` is
+`AVG(released_at - created_at)` over exactly that set, with zero schema change.
+
+**THE WINDOW FUNCTION, AND WHY IT IS NOT DECORATIVE.** `order_items` has a
+`seat_id`, never a `hold_id` — the two were never linked, because a seat can be
+held, released, and re-held by different people before it finally sells.
+`one_sold_seat`'s unique index guarantees exactly one buyer ever, but picking
+out *their* hold among possibly several needs
+`ROW_NUMBER() OVER (PARTITION BY order_item ORDER BY hold.created_at DESC)`,
+kept as one CTE (`convertedHoldsCte`) and reused by both the funnel (#4) and
+the average (#5) — so the two cannot quietly disagree about what counts as a
+conversion.
+
+**THE NEGATIVE CONTROL IS THE REASON THE FIXTURE HAS TWO SCENARIOS, NOT ONE.**
+Seat 1: buyer A holds and abandons it; buyer B holds and buys it — proves a
+*stranger's* abandoned hold is excluded (the easy case; `user_id` alone already
+handles it). Seat 2: buyer B abandons *their own* first attempt, then re-holds
+and buys the same seat — now there are two hold rows with the identical
+`seat_id` AND `user_id`, which `(seat_id, user_id)` alone cannot tell apart.
+Section 7 runs that plain join directly, with no `ROW_NUMBER()`:
+
+```
+naive join matches 3 hold row(s) for 2 order_items
+```
+
+Three, not two — it double-counts seat 2's order_item against both of buyer
+B's holds. The shipped query, proven in section 5 of the same run, counted
+exactly 2. That gap is what the window function is for.
+
+**A FALSE PASS THE TEST ITSELF PRODUCED, CAUGHT BEFORE THIS WAS ANNOTATED
+DONE.** The webhook fixture's `sessionPayload` copied `webhook-test.ts`'s
+helper without copying the `amount_total` override every one of *its*
+success-path calls applies. Left at the lazy default of 0, the webhook
+correctly recomputed the real price server-side (CLAUDE.md: "never trust the
+client for price") and refused to fulfil a session claiming ₹0 — both orders
+stayed `'pending'`, zero `order_items` were created. The revenue assertion
+still passed, because it compared `after − before` against a number read from
+the same empty `order_items` the bug produced: 0 against 0. Seven other
+assertions downstream failed loudly and surfaced it, but the fix is recorded
+in the assertion itself: the expected delta now comes from `sections`, fetched
+before either order_item exists — independent of the thing being verified, so
+a fixture that silently does nothing can no longer agree with itself.
+
+**THE BUG I FIXED BEFORE EVER RUNNING IT.** `getSalesOverTime`'s first draft
+capped the chart's series at `drop_at + 14 days` to stop a future `drop_at`
+from producing a backwards range. `generate_series` already returns zero rows
+when `start > end` with a positive step — the guard was solving a problem that
+doesn't exist while creating a real one: *any* event that dropped more than
+two weeks ago would have its chart truncated two weeks in, hiding every sale
+since, including today's. Replaced with `greatest(drop_at, now() - interval
+'90 days')` on the START only — a cap on lookback, which can only shorten a
+pathologically old window, never hide anything between a real `drop_at` and
+now.
+
+**Decisions worth recording:**
+
+1. **Revenue sums `order_items.price_cents`, never `sections.price_cents`.**
+   The former is frozen at purchase time; the latter is live and can have
+   moved since. `schema.ts`'s own comment on `order_items` says why: a receipt
+   priced through a join to a section whose price later changed would
+   retroactively rewrite what the customer paid.
+2. **Sell-through counts through `order_items`, never `seats.status`.** The
+   latter is a render cache that can read `'held'` on a seat whose hold
+   already expired (T22's lazy expiry). A report built from it would overstate
+   demand on exactly the seats that just freed up.
+3. **The revenue filter is `status = 'paid'`, an allow-list not an
+   exclude-list.** If a refund flow is ever added and sets `status =
+   'refunded'`, these queries stop counting that order for free, with no
+   change needed here.
+4. **`getSectionSellThrough` LEFT JOINs from `sections`**, so a section with
+   zero sales still reports `0%` instead of vanishing from the output — a
+   newly added, unsold section is a fact an organizer needs to see.
+5. **Every `COALESCE`s to 0, never leaves a SQL `null` to reach the caller.**
+   `SUM()`/`AVG()` over zero rows is `null` in Postgres; forwarded unchanged
+   that renders "₹NaN" on a quiet event. The one deliberate exception is
+   `getAvgHoldToPurchase.avgSeconds`, which stays `null` rather than `0` — `0`
+   would claim an instantaneous purchase when in fact nobody has converted
+   yet, which is a worse lie than showing nothing.
+6. **No new indexes.** `orders` has no index on `event_id`; the
+   `holds → seats → events` join the funnel's denominator needs has none
+   either. T38 is explicitly "run EXPLAIN ANALYZE, add indexes" — these five
+   queries are left exactly as expensive as they naturally are so T38 measures
+   something real rather than a problem T36 already quietly fixed.
+7. **`db.execute` results are cast explicitly, never trusted as typed.**
+   `::bigint` arrives through the driver as a string, the same trap that once
+   turned a `Date` column into a string elsewhere in this project — every
+   numeric result is wrapped in `Number(...)` rather than assumed.
+
+**Verification was built as deltas, not absolute values**, because the event
+this runs against already carries whatever seed data and prior test runs left
+behind — asserting "revenue is exactly ₹X" would be asserting about the
+database's entire history, not about this task. Every check snapshots the five
+queries before the fixture, runs it, snapshots again, and asserts the
+difference, which holds regardless of what else has ever happened to the
+event.
+
+**Regression:** hold 20 / expiry 18 / release 18 / checkout 24 / webhook 50 /
+success 18 / ticket 36 / scan 31 / email 37 / realtime 21 / queue 79 /
+queue-ui 48 / **analytics 27**, the T21 race test (1 winner, 49 conflicts, 0
+errors, zero oversells), `check-seed` clean, `typecheck` · `lint` · `build`
+green.
+
 
 ---
 
@@ -2475,7 +2601,7 @@ Grab a domain (free with the GitHub Student Pack) and point it at Vercel.
 | 7 · Tickets & check-in | T30–T32 | ☑ |
 | 8 · Realtime | T33 | ☑ |
 | 9 · Waiting room | T34–T35 | ☑ |
-| 10 · Dashboard | T36–T38 | ☐ |
+| 10 · Dashboard | T36–T38 | T36 ☑ · T37–T38 ☐ |
 | 11 · Design | T39–T41 | ☐ |
 | 12 · Proof | T42–T45 | ☐ |
 | 13 · Ship | T46–T50 | ☐ |
