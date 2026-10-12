@@ -18,7 +18,7 @@
  */
 export default function EventsLoading() {
   return (
-    <main className="mx-auto max-w-7xl px-4 pb-20 pt-10 sm:px-6 sm:pt-14">
+    <main className="mx-auto max-w-7xl px-4 pb-page-b pt-page sm:px-6 sm:pt-page-lg">
       {/* Announced once, so a screen reader is told the page is working rather
           than being read a grid of empty boxes. */}
       <p role="status" aria-live="polite" className="sr-only">

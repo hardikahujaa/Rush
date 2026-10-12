@@ -2895,13 +2895,107 @@ markup.
 
 ---
 
-### ☐ T41 🟢 — Empty, loading and error states
+### ☑ T41 🟢 — Empty, loading and error states
 
 **Prompt:**
 
 > Add a `loading.tsx` and `error.tsx` for every route segment, a custom `not-found.tsx`, and a designed empty state for: no events, no tickets, sold-out event. Add a global error boundary.
 
 **Commit:** `feat: loading and error states`
+
+**Done.** Every one of the app's 14 route segments now has both a
+`loading.tsx` and an `error.tsx` - two already existed (`events/loading.tsx`
+from T17, `events/[id]/seats/error.tsx` from this session) and both set the
+real pattern the other twenty-six follow, rather than being overwritten by a
+new convention. Plus a root `not-found.tsx` for genuinely unmatched URLs
+(distinct from the existing per-event one), a root `global-error.tsx`, and
+the sold-out state upgraded to match the weight of the other two designed
+empty states.
+
+**THE EXISTING FILES SET THE PATTERN; T41 EXTENDED IT, NOT REPLACED IT.**
+`events/loading.tsx`'s own comment already explains why it's a
+layout-matching skeleton rather than a spinner: a spinner occupies none of
+the final page's space, so everything shifts the moment it's replaced.
+`seats/error.tsx` already established the error-card shape - icon, a plain
+statement of what broke, reassurance about what did not happen, a `reset`
+button, a selectable digest. Both patterns are now shared components
+(`src/components/layout/page-skeleton.tsx`, `error-state.tsx`) that the
+other twenty-six files configure rather than reimplement.
+
+**ONE REAL SPLIT IN HOW THE SKELETONS WERE BUILT, STATED PLAINLY.** Six
+pages with genuinely rich, distinct layouts - the homepage, the event
+detail page, the seat map, the ticket list, the organizer dashboard, the
+order success page - got bespoke skeletons mirroring their actual
+structure. The other eight - `/dashboard`, `/organizer`, `/forbidden`,
+`/scan`, `/login`, `/signup`, the queue lobby - are simple enough (a
+heading, a line or two, sometimes a button) that hand-building eight
+subtly different skeletons for the same shape would be exactly the
+repetition T40 was just spent removing; those configure one shared
+`<PageSkeleton>` instead. `/scan` got neither treatment - it renders a
+full-bleed camera client island with no server-side layout worth
+mirroring, so its `loading.tsx` is a plain centred message rather than a
+skeleton pretending to know what a viewfinder looks like.
+
+**A SMALL BUG T40 LEFT BEHIND, FOUND AND FIXED WHILE BUILDING THIS.** T40
+updated `events/page.tsx`'s top padding to the new `pt-page` token (8) but
+never touched `events/loading.tsx`, which still carried the literal `pt-10`
+it replaced. That is a real, if tiny, regression T40 introduced without
+noticing - the skeleton and the real page disagreed on padding by 2 units.
+Caught while giving every loading.tsx the same token-based wrapper as its
+page, and fixed to match.
+
+**A PRE-EXISTING NEXT.JS CHARACTERISTIC, FOUND WHILE VERIFYING - NOT CAUSED
+BY ANYTHING HERE, AND NOT FIXED.** Checked the per-event `not-found.tsx`
+against the real production build (`next build && next start`, not the
+dev server, since Turbopack dev streaming can misreport this): a
+programmatic `notFound()` call from inside `events/[id]/page.tsx` returns
+HTTP 200, not 404. The new root `not-found.tsx` - a file-convention match
+for a genuinely unmatched URL - correctly returns 404, confirmed against
+the same production server. The difference is a known Next.js App Router
+limitation: a file-convention 404 is known before any response is sent; a
+programmatic `notFound()` thrown deep in a streamed render can fire after
+the 200 status line has already gone out, and HTTP does not allow changing
+it after the fact. This predates T41 entirely - neither
+`events/[id]/not-found.tsx` nor the `notFound()` call in `events/[id]/
+page.tsx` was touched this session - and fixing it would mean restructuring
+how that page renders (Partial Prerendering or similar), which is a
+materially different task than "add the missing files." Reported rather
+than silently fixed or silently left unmentioned.
+
+**THE ARCHITECTURAL FACT THAT SHAPED THE ROOT `not-found.tsx`, VERIFIED NOT
+ASSUMED.** A root `app/not-found.tsx` renders when no route segment matches
+at all - there is no matched layout tree to nest into, so Next renders it
+directly inside the bare root `layout.tsx`, with none of `(site)/
+layout.tsx`'s Navbar or flashlight. Confirmed against the production
+build: `grep -c "<header"` (the Navbar's real root tag, not `<nav>`) found
+it on the per-event not-found page and absent on the root one. The new
+file is self-contained because of this, not because it needed to be.
+
+**THE SOLD-OUT STATE WAS UPGRADED, NOT REPLACED WHOLESALE.** The brief asks
+for a designed empty state for "no events", "no tickets", and "sold-out
+event" - the first two already existed (icon, heading, description, a way
+out) from T17/the ticket page; sold-out was a one-line status strip, visibly
+a different weight for the same kind of fact. Brought up to match - but
+the seat grid stays visible underneath, deliberately: "every seat is taken"
+is a claim a buyer should be able to verify by looking at the actual chart,
+and a seat returning from an expired checkout (T22) has to be visible the
+instant it happens, which it cannot be if this state replaced the page the
+way the other two correctly do for a genuinely empty list.
+
+**`global-error.tsx` is deliberately self-contained** - inline styles, no
+`ErrorState`, no Tailwind classes, a plain `<a>` instead of `next/link`'s
+`<Link>` (with an explained lint suppression). It exists for the case
+where the root layout itself is what broke; trusting anything that layout
+would normally provide is the same mistake that got there.
+
+**Regression:** hold 20 / expiry 18 / release 18 / checkout 24 / webhook 50 /
+success 18 / ticket 36 / scan 31 / email 37 / realtime 21 / queue 79 /
+queue-ui 48 / analytics 27 / dashboard 22, the T21 race test (1 winner, 49
+conflicts, 0 errors, zero oversells), `check-seed` clean, `typecheck` ·
+`lint` · `build` green, the root 404 and the per-event-vs-root Navbar
+difference both reverified against a real `next start` production server,
+not just the dev server.
+
 
 ---
 
@@ -3029,7 +3123,7 @@ Grab a domain (free with the GitHub Student Pack) and point it at Vercel.
 | 8 · Realtime | T33 | ☑ |
 | 9 · Waiting room | T34–T35 | ☑ |
 | 10 · Dashboard | T36–T38 | ☑ |
-| 11 · Design | T39–T41 | T39–T40 ☑ · T41 ☐ |
+| 11 · Design | T39–T41 | ☑ |
 | 12 · Proof | T42–T45 | ☐ |
 | 13 · Ship | T46–T50 | ☐ |
 

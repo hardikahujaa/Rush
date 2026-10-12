@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
-import { ArrowLeft, CalendarDays, MapPin } from "lucide-react";
+import { ArrowLeft, CalendarDays, MapPin, TicketX } from "lucide-react";
 
 import { PageTitle } from "@/components/layout/page-title";
 import { SeatMap } from "@/components/seats/seat-map";
@@ -199,17 +199,42 @@ export default async function SeatsPage({ params }: Props) {
             no new query, and the two numbers cannot disagree.
           */}
           {stats.total > 0 && stats.available === 0 ? (
+            /*
+              T41's designed sold-out state. This used to be a small one-line
+              status strip - accurate, but visually a world apart from the
+              "no tickets"/"no events" empty states elsewhere in the app,
+              despite being the same kind of fact: there is nothing to buy
+              here right now. Upgraded to match their weight (icon, heading,
+              a way out) WITHOUT replacing the page the way those two do -
+              the seat grid stays visible underneath, because "every seat
+              is taken" is a claim a buyer can and should be able to verify
+              by looking at the actual chart, not just taking a card's word
+              for it. A seat returning from an expired checkout also has to
+              be visible the instant it happens, which it cannot be if this
+              state has hidden the grid that updates it live (T33).
+            */
             <div
               role="status"
-              className="glass mt-4 rounded-xl border-destructive/25 px-4 py-3"
+              className="glass mt-4 rounded-2xl border-destructive/25 px-6 py-8 text-center"
             >
-              <p className="text-sm font-medium text-foreground">
+              <TicketX
+                className="mx-auto size-7 text-muted-foreground"
+                aria-hidden="true"
+              />
+              <p className="mt-3 text-base font-semibold text-foreground">
                 This show is sold out
               </p>
-              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                Every seat is taken. Seats occasionally return when someone&rsquo;s
-                checkout expires, so it is worth refreshing.
+              <p className="mx-auto mt-1.5 max-w-sm text-pretty text-xs leading-relaxed text-muted-foreground">
+                Every seat is taken. Seats occasionally return the instant
+                someone&rsquo;s checkout expires - the chart below updates
+                live, so it is worth waiting here rather than refreshing.
               </p>
+              <Link
+                href="/events"
+                className="btn-gold-outline mt-5 inline-flex h-10 items-center rounded-xl px-5 text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                Browse other events
+              </Link>
             </div>
           ) : stats.total > 0 && stats.available / stats.total < 0.2 ? (
             <p
