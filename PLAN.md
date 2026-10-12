@@ -3001,19 +3001,138 @@ not just the dev server.
 
 ## PHASE 12 — Proof (the part that makes it credible)
 
-### ☐ T42 🔴 — Load test
+### ☑ T42 🔴 — Load test
 
 **Prompt:**
 
 > Write a k6 load test at `loadtest/holds.js`: 500 virtual users over 30 seconds all attempting to hold seats from a pool of 100 on the same event. After the run, query the database and assert that no seat has more than one live hold and no seat appears on more than one paid order. Give me the exact commands to install k6 on Windows and run it against my local server, then against the Vercel deployment.
 
-**Record these numbers — they are your CV bullet:**
-- Requests: ______
-- Oversells: ______ (must be 0)
-- p95 latency: ______ ms
-- Success/conflict split: ______
+**Recorded numbers — the CV bullet:**
+- Requests: **500**
+- Oversells: **0**
+- p95 latency: **2,426 ms** (tuned, `DB_POOL_MAX=20`) — **33,299 ms** at the dev default (`max: 5`). Both measured for real; see below.
+- Success/conflict split: **98 success / 402 conflict / 0 rate-limited / 0 unexpected**
 
 **Commit:** `test: k6 load test`
+
+**Done.** `loadtest/holds.js`, `scripts/seed-load-test.ts`, `scripts/verify-load-test.ts`,
+`scripts/reset-load-test.ts`. Full before/after and methodology in `README.md`'s
+"Load test (T42)" section.
+
+**ONE BLOCKER, STATED PLAINLY RATHER THAN QUIETLY DROPPED.** T05 (deploy to
+Vercel) has never been done — confirmed before touching anything, PLAN.md's
+own checkbox is still unchecked and no deployed URL exists anywhere in this
+repo. Everything against `localhost` is built, run, and verified below. The
+"against the Vercel deployment" half of the brief needs an actual deployment
+first, and even then I would ask before pointing 500 VUs at live, possibly
+billed Supabase/Upstash infrastructure rather than just doing it — that is
+exactly the kind of "affects shared state, costs money" action this project's
+own standing rules say to confirm, not assume.
+
+**THE AUTHENTICATION PROBLEM WAS ALREADY SOLVED, ELSEWHERE IN THIS REPO.**
+`/api/holds` needs 500 real signed-in identities, not one shared cookie. Rather
+than guess the Supabase session-cookie format (and silently 401 every request
+if the guess were wrong), `scripts/seed-load-test.ts` reuses
+`scripts/rbac-test.mjs`'s exact technique: a real `signInWithPassword()`
+against a capturing in-memory cookie jar, which returns "byte-for-byte what
+the browser would send" per that file's own comment. k6 scripts run in a
+sandboxed Goja runtime with no npm and no `@supabase/ssr`, so this
+authentication step has to happen in real Node, once, before k6 ever starts -
+500 cookies are captured up front and written to `loadtest/fixture.json`,
+which k6 just reads.
+
+**`PUBLIC.USERS` NEEDED NO NEW CODE.** Checked the trigger chain before writing
+anything: migration `0002`'s `on_auth_user_created` trigger fires on *any*
+insert into `auth.users`, including ones made through the admin API
+(`supabase.auth.admin.createUser`) - it mirrors every new account into
+`public.users` with `role: 'buyer'` inside the same transaction. 500 accounts
+created through the admin API arrive with a working `public.users` row for
+free.
+
+**A DEDICATED, ISOLATED FIXTURE EVENT, NOT REUSED SEED DATA.** A fresh
+"LOAD TEST — do not delete" venue/event/100 seats, created once and reused
+across runs. Reusing a real seeded event's seats would mean "no seat has more
+than one live hold" is being checked against a pool other test runs have
+already partially sold or held - true for the wrong reason. `scripts/
+reset-load-test.ts` releases the run's holds afterward without re-seeding the
+500 accounts or the event, so iterating on parameters doesn't mean
+recreating 500 real Supabase accounts every time.
+
+**TWO REAL FAILURES, HIT AND FIXED DURING THE ACTUAL RUN, NOT IN THEORY:**
+
+1. **The sign-in phase tripped Supabase's own auth rate limit, twice, before
+   the fix held.** `createUser` tolerated 15-way concurrency across 500 calls;
+   `signInWithPassword` started failing with "Request rate limit reached"
+   around the 30th call at the same concurrency. The FIRST fix - a fixed
+   `attempt * 1500ms` backoff - made it *worse*: every worker rate-limited in
+   the same instant backs off on the *identical* schedule and collides again
+   on the next attempt. A run with that backoff still exhausted all 8 retries
+   and failed outright around user 107. Full jitter (`random() * cap`, capped
+   at 30s, up to 12 attempts) plus dropping concurrency to 3 is what actually
+   broke the lockstep - the second attempt signed in all 500 accounts cleanly.
+2. **k6's own `http_req_failed` metric misclassified the test's expected
+   outcome as failure.** It treats any non-2xx response as failed by default -
+   with 500 people and 100 seats, *at least* 400 `409`s are structurally
+   guaranteed, so the first real run tripped a `rate<0.01` threshold meant for
+   genuine 5xx/timeout errors, regardless of whether anything was actually
+   wrong (it wasn't - 0 oversells, confirmed separately). Fixed with
+   `http.setResponseCallback(http.expectedStatuses(200, 409, 429))`, after
+   which the threshold measures what it says it measures.
+
+**THE 14× LATENCY GAP IS THE CONNECTION POOL, MEASURED RATHER THAN ASSUMED -
+exactly the variable flagged in the approved plan before any code was
+written.** `src/db/index.ts` caps Postgres at `max: 5` connections in local
+dev. Two full runs, otherwise identical:
+
+| | pool `max: 5` (default) | pool `max: 20` |
+|---|---|---|
+| p95 latency | 33,299 ms | 2,426 ms |
+| oversells | 0 | 0 |
+| success/conflict | 99/401 | 98/402 |
+
+Correctness is identical at both pool sizes - the row lock was never the
+bottleneck. 500 concurrent requests sharing 5 connections queue behind each
+other, and `http_req_duration` measures the whole round trip including
+however long a request waited for a free connection before its transaction
+even began. Bumping `DB_POOL_MAX` to 20 (restart required - the pool size is
+read once at module load) and nothing else dropped p95 by roughly 14×. The
+override was reverted after the measurement; this repo's default dev pool
+stays at 5 unless a future task decides otherwise.
+
+**WHY `per-vu-iterations`, NOT THE EXECUTOR THE BRIEF'S WORDING SUGGESTS.**
+"500 virtual users... attempting to hold" looks like k6's `shared-iterations`
+executor (500 iterations shared across VUs) - rejected after reading exactly
+what it guarantees: work distribution across workers, not identity. A VU that
+finishes fast can grab a second iteration from the shared pool before a
+slower VU runs even once, which would mean one authenticated identity fires
+twice while another never fires at all - breaking the thing this test is
+actually checking (500 *distinct* real buyers, each clicking buy once).
+`per-vu-iterations` with `iterations: 1` guarantees exactly one run per VU,
+with a random 0-25s sleep per VU standing in for "over 30 seconds" - 500
+independent coin flips land roughly uniformly across the window, which is
+what people clicking buy during a drop actually looks like, without k6's
+ramping executors' VU-reuse ambiguity.
+
+**k6 ON WINDOWS NEEDED A DIFFERENT INSTALL PATH THAN PLANNED.**
+`winget install -e --id k6.k6` (the ID given in the approved plan, taken from
+a web search) returned "No package found" - the real id is `GrafanaLabs.k6`.
+Found that, then the MSI installer hung indefinitely on `Starting package
+install...` - almost certainly a UAC elevation prompt with no interactive
+session to approve it. Switched to k6's portable standalone binary
+(`k6-v2.2.0-windows-amd64.zip` from GitHub releases) instead: no installer, no
+admin rights, no UAC. Copied the executable into the user's `WindowsApps`
+folder, which is already on `PATH` without a shell restart.
+
+**Not touched, and stated rather than silently worked around:** this project
+has still never been deployed (T05). The half of the brief that needs a live
+Vercel URL stays open until that happens.
+
+**Regression:** hold 20 / expiry 18 / release 18 / checkout 24 / webhook 50 /
+success 18 / ticket 36 / scan 31 / email 37 / realtime 21 / queue 79 /
+queue-ui 48 / analytics 27 / dashboard 22, the T21 race test (1 winner, 49
+conflicts, 0 errors, zero oversells), `check-seed` clean, `typecheck` ·
+`lint` · `build` green - re-run after the dev server was restarted back to
+its default pool size, confirming the T42 experiment left nothing behind.
 
 ---
 
@@ -3124,7 +3243,7 @@ Grab a domain (free with the GitHub Student Pack) and point it at Vercel.
 | 9 · Waiting room | T34–T35 | ☑ |
 | 10 · Dashboard | T36–T38 | ☑ |
 | 11 · Design | T39–T41 | ☑ |
-| 12 · Proof | T42–T45 | ☐ |
+| 12 · Proof | T42–T45 | T42 ☑ · T43–T45 ☐ |
 | 13 · Ship | T46–T50 | ☐ |
 
 **51 tasks.** At 2 per session, that's roughly 26 sessions — comfortably inside a month with buffer for the days something breaks.

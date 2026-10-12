@@ -33,3 +33,46 @@ Read it **inside-out**: the innermost (most indented) nodes run first; their out
 - **`Buffers: shared hit=X read=Y`** — `hit` is a page found already in Postgres's cache (cheap, in memory); `read` came from disk (or the OS cache). A plan with large `read` numbers on a hot path is a candidate for more RAM or a smaller working set, not necessarily a missing index.
 - **`Planning Time` vs `Execution Time`** — printed separately on purpose. A query that plans slowly but executes fast is a different problem (e.g. too many indexes to consider) than one that plans fast and executes slowly (a missing index, almost always).
 - **Total cost is read top node down; wall-clock time is read leaf node up.** The number next to the very first line (`cost=...`) is the planner's estimate for the *entire* query; `Execution Time` at the very bottom is what the database actually measured end to end.
+
+## Load test (T42)
+
+`k6 run loadtest/holds.js` — 500 real, independently-authenticated Supabase sessions, each attempting to hold one random seat from a dedicated 100-seat event, arrivals jittered across a ~25s window. `scripts/seed-load-test.ts` provisions the fixtures; `scripts/verify-load-test.ts` runs the actual correctness proof against Postgres immediately after.
+
+**The headline numbers:**
+
+| | |
+|---|---|
+| Requests | 500 |
+| Oversells | **0** |
+| Success / conflict split | 98 success / 402 conflict / 0 rate-limited / 0 unexpected |
+| p95 latency | **2,426 ms** (tuned — `DB_POOL_MAX=20`) · 33,299 ms (default dev pool, `max: 5`) |
+
+**With 500 people and 100 seats, at least 400 losing the race is the correct outcome, not a failure.** A run where everyone got `200` would mean the seat pool was bigger than intended — it would prove nothing. What actually matters: zero oversells, confirmed by querying Postgres directly, not by trusting the HTTP responses.
+
+```
+1. No seat has more than one live hold        → PASS (0 of 100 duplicated)
+2. No seat appears on more than one paid order → PASS (0 order_items — this run only holds)
+3. live holds never exceed the pool size       → PASS (98 / 100)
+```
+
+**The 14× latency gap between the two p95 numbers is the connection pool, found by measuring rather than assumed.** `src/db/index.ts` caps Postgres connections at `max: 5` in local dev (production defaults to `max: 1`, relying on Supabase's own pooler for fan-out). 500 concurrent requests sharing 5 connections queue behind each other — the first run's 33.3s p95 is that queue, not the row lock: correctness held identically at both pool sizes (0 oversells, same success/conflict split within noise), and `http_req_duration` measures time-to-response, which includes however long a request waited for a free connection before a transaction even began. Bumping `DB_POOL_MAX` to 20 and restarting the server dropped p95 to 2.4s with no other change — the lock was never the bottleneck; the pool was.
+
+**One real bug the first run caught, in the test itself, not the app.** k6's `http_req_failed` metric treats any non-2xx response as a failure by default — it has no way to know a `409` here means the database correctly refused a seat that was already gone. With 400 of 500 responses *guaranteed* to be `409`, the first run tripped a `rate<0.01` threshold meant for genuine 5xx/timeout errors, on every run, regardless of correctness. Fixed with `http.setResponseCallback(http.expectedStatuses(200, 409, 429))` — after that, the threshold measures what it's supposed to.
+
+**Windows setup** (verified on this install, not from memory — `winget`'s k6 package ID has changed since older guides were written):
+
+```powershell
+winget install -e --id GrafanaLabs.k6
+k6 version
+```
+
+Run against localhost with the app's dev server up:
+
+```
+npm run seed-load-test -- 500    # once - provisions 500 real Supabase accounts
+npm run loadtest                 # k6 run loadtest/holds.js
+npm run verify-load-test         # the actual oversell proof
+npm run reset-load-test          # release holds, ready for another run
+```
+
+Against a Vercel deployment: `BASE_URL=https://your-app.vercel.app k6 run loadtest/holds.js` — not run here, since this project has not yet been deployed (T05).

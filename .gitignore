@@ -45,3 +45,8 @@ next-env.d.ts
 
 # Rendered by scripts/email-preview.mts --html; never committed.
 email-preview.html
+
+# T42: scripts/seed-load-test.ts's output - carries 500 live session cookies.
+# Throwaway test accounts, but a session token is a session token.
+/loadtest/fixture.json
+/loadtest/summary.json
