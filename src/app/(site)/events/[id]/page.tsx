@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { ArrowLeft, CalendarDays, MapPin, Ticket } from "lucide-react";
 
 import { EventCTA } from "@/components/events/event-cta";
+import { PageTitle } from "@/components/layout/page-title";
 import { findEvent } from "@/lib/event-lookup";
 import { formatPaise } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -126,9 +127,9 @@ export default async function EventDetailPage({ params }: Props) {
             {event.status === "ended" ? "Past event" : "On RUSH"}
           </span>
 
-          <h1 className="text-metal mt-5 text-balance text-4xl font-bold leading-[1.02] tracking-[-0.04em] sm:text-6xl lg:text-7xl">
+          <PageTitle size="hero" className="mt-5">
             {event.title}
-          </h1>
+          </PageTitle>
 
           {event.subtitle && (
             <p className="mt-3 text-lg text-gold-champagne/90 sm:text-xl">

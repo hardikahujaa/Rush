@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { CalendarDays, MapPin, ShieldCheck, TicketX } from "lucide-react";
 
+import { PageTitle } from "@/components/layout/page-title";
 import { TicketCard } from "@/components/tickets/ticket-card";
 import { getTicketsForUser } from "@/db/queries/tickets";
 import { requireUser } from "@/lib/auth";
@@ -53,11 +54,9 @@ export default async function TicketsPage() {
   const total = groups.reduce((n, g) => n + g.tickets.length, 0);
 
   return (
-    <main className="mx-auto max-w-5xl px-4 pb-20 pt-10 sm:px-6 sm:pt-14">
+    <main className="mx-auto max-w-5xl px-4 pb-page-b pt-page sm:px-6 sm:pt-page-lg">
       <header>
-        <h1 className="text-metal text-balance text-3xl font-bold leading-[1.05] tracking-[-0.035em] sm:text-4xl">
-          Your tickets
-        </h1>
+        <PageTitle>Your tickets</PageTitle>
         {total > 0 && (
           <p className="mt-3 text-sm text-muted-foreground">
             <span className="tabular-nums text-foreground">{total}</span>{" "}

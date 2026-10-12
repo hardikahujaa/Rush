@@ -15,6 +15,7 @@ import {
 import { requireRole } from "@/lib/auth";
 import { formatPaise } from "@/lib/format";
 
+import { PageTitle } from "@/components/layout/page-title";
 import { RecentOrders } from "@/components/organizer/recent-orders";
 import { SalesOverTimeChart } from "@/components/organizer/sales-over-time-chart";
 import { SellThroughChart } from "@/components/organizer/sell-through-chart";
@@ -102,7 +103,7 @@ export default async function OrganizerEventDashboard({ params }: Props) {
         ) / 10;
 
   return (
-    <main className="mx-auto max-w-6xl px-4 pb-24 pt-8 sm:px-6 sm:pt-12">
+    <main className="mx-auto max-w-6xl px-4 pb-page-b pt-page sm:px-6 sm:pt-page-lg">
       <Link
         href="/organizer"
         className="inline-flex items-center gap-2 rounded-full py-2 text-sm text-foreground/75 outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
@@ -112,9 +113,7 @@ export default async function OrganizerEventDashboard({ params }: Props) {
       </Link>
 
       <header className="mt-4">
-        <h1 className="text-metal text-balance text-3xl font-bold leading-[1.05] tracking-[-0.035em] sm:text-4xl">
-          {header.title}
-        </h1>
+        <PageTitle>{header.title}</PageTitle>
         <p className="mt-2 text-sm text-muted-foreground">
           {header.venue}, {header.city} · {formatDate(header.startsAt)}
         </p>

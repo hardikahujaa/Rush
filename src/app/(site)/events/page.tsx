@@ -4,6 +4,7 @@ import { SearchX, X } from "lucide-react";
 
 import { EventCard } from "@/components/home/event-card";
 import { Footer } from "@/components/layout/footer/footer";
+import { PageTitle } from "@/components/layout/page-title";
 import { getEventCards, type EventBucket } from "@/db/queries/events";
 
 export const metadata: Metadata = {
@@ -78,11 +79,9 @@ export default async function EventsPage({ searchParams }: Props) {
 
   return (
     <>
-      <main className="mx-auto max-w-7xl px-4 pb-20 pt-10 sm:px-6 sm:pt-14">
+      <main className="mx-auto max-w-7xl px-4 pb-page-b pt-page sm:px-6 sm:pt-page-lg">
         <header>
-          <h1 className="text-metal text-balance text-3xl font-bold leading-[1.05] tracking-[-0.035em] sm:text-4xl">
-            All events
-          </h1>
+          <PageTitle>All events</PageTitle>
           <p className="mt-3 text-sm text-muted-foreground">
             <span className="tabular-nums text-foreground">{results.length}</span>{" "}
             {results.length === 1 ? "event" : "events"}

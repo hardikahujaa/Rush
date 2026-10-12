@@ -52,6 +52,38 @@
   --radius-xl: calc(var(--radius) * 1.4);
   --radius-2xl: calc(var(--radius) * 1.8);
   --radius-3xl: calc(var(--radius) * 2.2);
+  /**
+   * T40. The page-level vertical rhythm.
+   *
+   * Before this, every top-level page picked its own top/bottom padding by
+   * eye: `pt-8`, `pt-10`, `pt-12`, `pt-14`, `pb-20`, `pb-24` all appeared
+   * across different pages with no shared name tying them together, so
+   * "page padding" was six unrelated numbers that happened to look similar
+   * rather than one decision applied six times. These three names are that
+   * one decision - `pt-page` / `sm:pt-page-lg` for the top (which the
+   * existing pages DO step up at `sm:`), and a single flat `pb-page-b` for
+   * the bottom (which none of them stepped up - the one place this rhythm
+   * follows what the pages already did, rather than inventing a responsive
+   * step that was never there).
+   *
+   * NAMED `page-b`, NOT reusing `page`: Tailwind's spacing scale is ONE flat
+   * namespace shared by every directional utility - `pt-page` and `pb-page`
+   * would both resolve to the SAME `--spacing-page` value, there is no way
+   * to give top and bottom different numbers under one name. Found by
+   * reading the compiled CSS rather than assuming: `pb-page` first shipped
+   * here compiling to `padding-bottom: calc(var(--spacing) * 8)` - silently
+   * the TOP value, because that is genuinely what the name `page` resolved
+   * to. `page-b` is a distinct scale entry for exactly that reason.
+   *
+   * NOT applied to `seats/page.tsx`'s bottom padding (`pb-44`): that value
+   * is deliberately larger to clear the fixed-position checkout bar stacked
+   * on top of the page content - that is content-clearance, not rhythm, and
+   * giving it the rhythm's name would hide the actual reason a future edit
+   * needs to change it.
+   */
+  --spacing-page: calc(var(--spacing) * 8);
+  --spacing-page-lg: calc(var(--spacing) * 14);
+  --spacing-page-b: calc(var(--spacing) * 24);
   --radius-4xl: calc(var(--radius) * 2.6);
   /* shadcn CLI additions for T39 (Magic UI's ShimmerButton and Marquee) -
      reformatted to this file's indentation; values untouched. */

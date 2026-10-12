@@ -2781,13 +2781,117 @@ conflicts, 0 errors, zero oversells), `check-seed` clean, `typecheck` ·
 
 ---
 
-### ☐ T40 🟡 — Design system pass
+### ☑ T40 🟡 — Design system pass
 
 **Prompt:**
 
 > Audit every page for visual consistency. Define a proper colour scale, spacing rhythm, and type scale in the Tailwind config and apply it everywhere. Add page transition animations. Make sure the seat map is usable on a phone.
 
 **Commit:** `style: design system consistency pass`
+
+**Done.** A real audit of every page (not a skim), one correction to the
+brief's own wording, a spacing-rhythm token pair, a shared heading
+component, nine pages brought onto it, a page-transition `template.tsx`,
+and a verification pass on the seat map's mobile handling that found it
+already correct.
+
+**ONE CORRECTION BEFORE ANYTHING ELSE: THERE IS NO TAILWIND CONFIG TO PUT
+THIS IN.** The brief says "define it in the Tailwind config." This project
+has none — confirmed during T39 already, reconfirmed here: Tailwind v4,
+pure CSS-first config, everything lives in `globals.css`'s `@theme` block.
+That is where the spacing rhythm actually went.
+
+**THE TYPE SCALE DELIBERATELY DID NOT GO THERE, AND THE REASON IS A REAL
+FINDING, NOT A STYLE PREFERENCE.** Tailwind v4 genuinely supports naming a
+font size in `@theme`, and the obvious move was to override the *existing*
+`--text-3xl`/`--text-4xl` keys with this heading's leading and tracking,
+since the duplicated pages all already compose `text-3xl … sm:text-4xl`.
+Checked who else uses those two keys before doing it:
+`grep -rl "text-3xl\|text-4xl" src` returns **fourteen files** — stat
+cards, the success page, the admission curtain, the gate scanner's verdict
+screen, standing-zone pricing. Overriding the base scale to fix four pages
+would have silently reshaped the typography of ten unrelated ones — a
+consistency pass that introduces ten new inconsistencies to remove four.
+`<PageTitle>` (`src/components/layout/page-title.tsx`) sidesteps this
+entirely: importing it cannot change anything that does not import it.
+
+**A REAL BUG, CAUGHT BY READING THE COMPILED CSS RATHER THAN TRUSTING THE
+CLASS NAME.** The spacing rhythm shipped with three theme keys —
+`--spacing-page` (8), `--spacing-page-lg` (14), `--spacing-page-b` (24) —
+and every page was written using `pb-page` for the bottom value, expecting
+24. It silently compiled to 8. Tailwind's spacing scale is **one flat
+namespace shared by every directional utility** — `pt-page` and `pb-page`
+both resolve to the *same* `--spacing-page` key; there is no way for two
+different directions to read two different numbers under one name. Found
+by grepping the actual production CSS bundle for `.pb-page{...}`, not by
+assuming the class name I typed meant what I intended — it read
+`padding-bottom: calc(var(--spacing) * 8)`, silently the TOP value. Fixed
+by renaming the class to `pb-page-b` everywhere, then re-verified against
+the rebuilt CSS: `.pb-page-b{padding-bottom:calc(var(--spacing) * 24)}`,
+exactly as intended.
+
+**THE AUDIT, AND WHAT IT ACTUALLY FOUND:**
+
+1. **A heading pattern was already copy-pasted identically into four
+   files** — `events/page.tsx`, `tickets/page.tsx`,
+   `events/[id]/queue/page.tsx`, `organizer/events/[id]/page.tsx` all
+   carried the exact string
+   `"text-metal text-balance text-3xl font-bold leading-[1.05] tracking-[-0.035em] sm:text-4xl"`.
+   Not a bug by itself, but fragile — a future tweak has to find and edit
+   it identically in all four or it silently drifts.
+2. **`seats/page.tsx` had already drifted** — one step, to `sm:text-5xl` —
+   live evidence of exactly the failure mode (1) describes. Corrected to
+   the shared tier.
+3. **Three pages read as unfinished stubs** — `dashboard/page.tsx`,
+   `organizer/page.tsx`, `forbidden/page.tsx` used a plain
+   `text-2xl font-semibold tracking-tight`, none of the gradient or
+   `text-balance` treatment every other page has. Brought onto
+   `<PageTitle>`. Found and fixed the same drift a fourth and fifth time
+   in `events/[id]/not-found.tsx` (yet another one-off variant,
+   `tracking-[-0.03em]` instead of `-0.035em`, no `sm:` step at all) while
+   sweeping the rest of the site for any remaining bare `<h1>`.
+4. **The vertical rhythm was six close-but-different numbers** —
+   `pt-8/10/12/14`, `pb-20/24` — now two named steps, applied to all six
+   pages that had the pattern.
+5. **Colour tokens were already clean.** Zero stray hex at the page level,
+   confirmed by grep before claiming otherwise. Nothing invented here that
+   wasn't asked for.
+6. **No page-transition mechanism existed at all** — `template.tsx`
+   (the idiomatic App Router primitive that remounts per navigation, unlike
+   `layout.tsx`) now wraps every `(site)` route in a fade-and-rise entrance,
+   gated on `useReducedMotion`. Deliberately one-sided, not a crossfade —
+   a true crossfade needs the outgoing page kept mounted via `AnimatePresence`
+   keyed on pathname above where the unmount happens, which would mean
+   lifting `usePathname()` into a client wrapper above every page in the
+   app, including ones with heavy data fetches still in flight, for a
+   heavier mechanism than this project uses anywhere else.
+7. **The seat map's mobile handling was checked, not rebuilt — and found
+   already correct.** The horizontal-scroll approach (confined to the map's
+   own box, preserving the 24px tap-target floor rather than shrinking
+   seats below it) already has a documented rationale in the code. Checked
+   the two things most likely to break at 375px: the checkout bar
+   (`fixed inset-x-0` — genuinely full-width, no fixed pixel width) and the
+   tier legend (`flex-wrap` over `min-w-[9.5rem]` cards — wraps cleanly).
+   No bug found; no change made. A consistency pass that invents churn to
+   look thorough is worse than one that says "already fine" when it is.
+
+**One deliberate boundary, stated rather than crossed:** `seats/error.tsx`'s
+heading (`text-2xl`, inside a constrained `glass` card) and the homepage's
+"no events" empty-state card (`text-sm font-medium`, no gradient at all)
+are a *third*, inconsistent heading family — but they are card-contained
+state headings, not page-level `<h1>`s, and T41 ("designed empty states")
+owns redesigning exactly these cards. Touching them now risks the same
+collision flagged when T40/T41 parallelism was discussed: two passes
+reshaping the same region independently. Left for T41.
+
+**Regression:** hold 20 / expiry 18 / release 18 / checkout 24 / webhook 50 /
+success 18 / ticket 36 / scan 31 / email 37 / realtime 21 / queue 79 /
+queue-ui 48 / analytics 27 / dashboard 22, the T21 race test (1 winner, 49
+conflicts, 0 errors, zero oversells), `check-seed` clean, `typecheck` ·
+`lint` · `build` green — and the fixed `pb-page-b` reverified against the
+actual compiled CSS after the correction, not just the class name in the
+markup.
+
 
 ---
 
@@ -2925,7 +3029,7 @@ Grab a domain (free with the GitHub Student Pack) and point it at Vercel.
 | 8 · Realtime | T33 | ☑ |
 | 9 · Waiting room | T34–T35 | ☑ |
 | 10 · Dashboard | T36–T38 | ☑ |
-| 11 · Design | T39–T41 | T39 ☑ · T40–T41 ☐ |
+| 11 · Design | T39–T41 | T39–T40 ☑ · T41 ☐ |
 | 12 · Proof | T42–T45 | ☐ |
 | 13 · Ship | T46–T50 | ☐ |
 

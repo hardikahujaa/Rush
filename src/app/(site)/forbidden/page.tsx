@@ -3,6 +3,7 @@ import Link from "next/link";
 import { ShieldX } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { PageTitle } from "@/components/layout/page-title";
 import { getCurrentUser } from "@/lib/auth";
 
 export const metadata: Metadata = { title: "Not allowed" };
@@ -25,9 +26,7 @@ export default async function ForbiddenPage({
   return (
     <main className="flex min-h-svh flex-col items-center justify-center px-4 text-center">
       <ShieldX className="size-10 text-muted-foreground" aria-hidden="true" />
-      <h1 className="mt-6 text-2xl font-semibold tracking-tight">
-        You do not have access to this page
-      </h1>
+      <PageTitle className="mt-6">You do not have access to this page</PageTitle>
       <p className="mt-3 max-w-md text-sm text-muted-foreground">
         {user
           ? `Your account (${user.email}) has the "${user.role}" role, which is not permitted here.`

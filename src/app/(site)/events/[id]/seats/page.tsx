@@ -3,6 +3,7 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { ArrowLeft, CalendarDays, MapPin } from "lucide-react";
 
+import { PageTitle } from "@/components/layout/page-title";
 import { SeatMap } from "@/components/seats/seat-map";
 import { getActiveHoldsForUser } from "@/db/queries/holds";
 import { getSeatMapForEvent, type SeatMapData } from "@/db/queries/seats";
@@ -145,7 +146,7 @@ export default async function SeatsPage({ params }: Props) {
   return (
     /* Bottom padding clears the fixed checkout bar. Without it the status key
        sits permanently underneath the cart and cannot be scrolled into view. */
-    <main className="mx-auto max-w-6xl px-4 pb-44 pt-8 sm:px-6 sm:pt-12">
+    <main className="mx-auto max-w-6xl px-4 pb-44 pt-page sm:px-6 sm:pt-page-lg">
       <Link
         href={`/events/${id}`}
         className="inline-flex items-center gap-2 rounded-full py-2 text-sm text-foreground/75 outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
@@ -155,9 +156,7 @@ export default async function SeatsPage({ params }: Props) {
       </Link>
 
       <header className="mt-4">
-        <h1 className="text-metal text-balance text-3xl font-bold leading-[1.05] tracking-[-0.035em] sm:text-5xl">
-          Choose your seats
-        </h1>
+        <PageTitle>Choose your seats</PageTitle>
         <p className="mt-3 text-lg text-gold-champagne/90">{event.title}</p>
 
         <div className="mt-3 flex flex-col gap-1.5 text-sm text-muted-foreground sm:flex-row sm:items-center sm:gap-6">

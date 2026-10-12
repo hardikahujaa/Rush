@@ -3,10 +3,11 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { ArrowLeft, CalendarDays, MapPin } from "lucide-react";
 
+import { PageTitle } from "@/components/layout/page-title";
+import { QueueLobby } from "@/components/queue/queue-lobby";
 import { getCurrentUser } from "@/lib/auth";
 import { findEvent } from "@/lib/event-lookup";
 import { isQueueActive } from "@/lib/queue";
-import { QueueLobby } from "@/components/queue/queue-lobby";
 import { checkGate } from "@/lib/queue-gate";
 
 type Props = { params: Promise<{ id: string }> };
@@ -78,7 +79,7 @@ export default async function QueuePage({ params }: Props) {
   if (verdict.allowed) redirect(`/events/${id}/seats`);
 
   return (
-    <main className="mx-auto max-w-xl px-4 pb-24 pt-8 sm:px-6 sm:pt-14">
+    <main className="mx-auto max-w-xl px-4 pb-page-b pt-page sm:px-6 sm:pt-page-lg">
       <Link
         href={`/events/${id}`}
         className="inline-flex items-center gap-2 rounded-full py-2 text-sm text-foreground/75 outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
@@ -96,9 +97,7 @@ export default async function QueuePage({ params }: Props) {
           Drop in progress
         </p>
 
-        <h1 className="text-metal mt-5 text-balance text-3xl font-bold leading-[1.05] tracking-[-0.035em] sm:text-4xl">
-          You&rsquo;re in the queue
-        </h1>
+        <PageTitle className="mt-5">You&rsquo;re in the queue</PageTitle>
         <p className="mt-3 text-base text-gold-champagne/90">{event.title}</p>
 
         <div className="mt-3 flex flex-col items-center gap-1.5 text-sm text-muted-foreground sm:flex-row sm:justify-center sm:gap-6">

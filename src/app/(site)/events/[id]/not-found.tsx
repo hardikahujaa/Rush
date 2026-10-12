@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { SearchX } from "lucide-react";
 
+import { PageTitle } from "@/components/layout/page-title";
+
 /**
  * Shown when notFound() fires for an unknown event id.
  *
@@ -13,9 +15,7 @@ export default function EventNotFound() {
     <main className="mx-auto flex min-h-[70svh] max-w-lg flex-col items-center justify-center px-4 text-center">
       <SearchX className="size-10 text-muted-foreground" aria-hidden="true" />
 
-      <h1 className="text-metal mt-6 text-3xl font-bold tracking-[-0.03em]">
-        That event is not here
-      </h1>
+      <PageTitle className="mt-6">That event is not here</PageTitle>
 
       <p className="mt-3 text-pretty text-sm leading-relaxed text-muted-foreground">
         The link may be mistyped, or the show may have been taken down by its

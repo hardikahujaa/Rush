@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 
+import { PageTitle } from "@/components/layout/page-title";
 import { requireUser } from "@/lib/auth";
 
 export const metadata: Metadata = { title: "Dashboard" };
@@ -12,8 +13,8 @@ export default async function DashboardPage() {
   const user = await requireUser();
 
   return (
-    <main className="mx-auto w-full max-w-3xl px-4 py-16">
-      <h1 className="text-2xl font-semibold tracking-tight">Your dashboard</h1>
+    <main className="mx-auto w-full max-w-3xl px-4 pb-page-b pt-page sm:pt-page-lg">
+      <PageTitle>Your dashboard</PageTitle>
       <p className="mt-2 text-sm text-muted-foreground">
         Signed in as {user.email} ({user.role}).
       </p>
