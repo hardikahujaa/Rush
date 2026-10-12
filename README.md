@@ -76,3 +76,30 @@ npm run reset-load-test          # release holds, ready for another run
 ```
 
 Against a Vercel deployment: `BASE_URL=https://your-app.vercel.app k6 run loadtest/holds.js` — not run here, since this project has not yet been deployed (T05).
+
+## Testing (T43)
+
+```
+npm run test              # Vitest unit tests — fast, no network
+npm run test:integration  # Vitest against the real dev Supabase DB
+npm run test:e2e          # Playwright — one full buyer path, real browser
+```
+
+**Unit vs. integration was a deliberate split, not a default.** `src/lib/qr.ts` and `src/lib/ticket-crypto.ts` are pure functions and get real unit tests (`tests/unit/`). "Hold expiry," though, is a database invariant — *"a hold is live iff `released_at IS NULL AND expires_at > now()`"* — compared against **Postgres's own clock**, not the app server's. Reimplementing that comparison in JavaScript and testing the reimplementation would prove nothing about the actual SQL in `src/db/queries/availability.ts`. `tests/integration/hold-expiry.test.ts` instead owns a small, disposable fixture and exercises the real exported SQL fragments and `releaseExpiredHolds()` directly against the dev DB — the same database every `scripts/*.ts` test already uses, just with real `expect()` assertions.
+
+**A real gotcha, not a hypothetical one: `server-only` throws under Vitest by default.** Every query module starts with `import "server-only"`, whose export map resolves to an unconditionally-throwing `index.js` unless resolved under the `react-server` condition — which is exactly why every `tsx` script in `package.json` runs with `--conditions=react-server`. Vitest externalizes `node_modules` packages by default, which bypasses Vite's own `resolve.conditions` for them, so the fix in `vitest.config.mts` is an alias straight to an empty stub (`tests/stubs/server-only.ts`), not a conditions setting.
+
+**Price calculation got a small, real refactor, not just a test.** `createHold` and `createPendingOrder` (and `getActiveHoldsForUser`) each had their own identical `.reduce((sum, item) => sum + item.priceCents, 0)`. Pulled into one `calculateTotalCents()` in `src/lib/pricing.ts` — deduplication the test needed in order to test anything at all, not a speculative abstraction. The full existing regression suite (`hold-test` 20 / `expiry-test` 18 / `release-test` 18 / `checkout-test` 24 / `webhook-test` 50 — 130 checks) was re-run after the change and stayed green.
+
+**The one E2E test is real end-to-end, nothing mocked:** sign up → browse (`/events?q=`) → select a seat → hold → Stripe Checkout with the `4242 4242 4242 4242` test card → the success page, confirmed paid by the actual webhook. Two things have to already be running locally, stated plainly rather than silently assumed:
+
+1. `stripe listen --forward-to localhost:3000/api/webhooks/stripe` in a separate terminal. The success page polls for `"paid"`, and the order only flips once the webhook actually lands — without the tunnel the test hangs on the success page rather than failing fast.
+2. The dev server (`npm run dev`), which `playwright.config.ts`'s `webServer` will start for you if it isn't already up.
+
+Three real bugs surfaced building this, all found by running it against the real app rather than guessing selectors:
+
+- `/available/i` as a seat-button matcher also matches `"...on hold, **un**available"` — anchored to `/, available$/i` instead, matching the exact suffix `SeatButton`'s label always ends with in the genuinely-free case.
+- `SuccessView`'s confirmed heading (`"You're going."`) is `aria-hidden="true"` on purpose — the paid state is announced to assistive tech once, through a sibling `role="status"` live region, instead of twice. `getByRole("heading", ...)` can never find it; the test asserts on the status region's text instead.
+- Playwright runs `globalSetup` and `globalTeardown` in the **same Node process**. Closing the (dev-mode, `globalThis`-cached) shared DB connection in setup handed teardown an already-ended connection. Fixed by giving the E2E fixtures their own connection, opened and closed within each call, independent of `src/db`'s app-singleton.
+
+**Not chased further, and stated plainly:** a passing E2E run ends with `Assertion failed: !(handle->flags & UV_HANDLE_CLOSING), file src\win\async.c, line 94` on this Windows machine — after Playwright has already printed `1 passed`. Confirmed NOT caused by this project's code: it persists with the DB connection fully isolated and closed, and does not occur on a trivial spec using the identical config, so it tracks with this specific test's longer, cross-origin (`checkout.stripe.com`) navigation, not anything `purchase-flow.spec.ts` or its fixtures do. Reads as an upstream Node/Playwright-on-Windows native teardown quirk; the test result itself is unaffected.

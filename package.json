@@ -41,7 +41,10 @@
     "seed-load-test": "tsx --conditions=react-server --env-file=.env.local scripts/seed-load-test.ts",
     "verify-load-test": "tsx --conditions=react-server --env-file=.env.local scripts/verify-load-test.ts",
     "reset-load-test": "tsx --conditions=react-server --env-file=.env.local scripts/reset-load-test.ts",
-    "loadtest": "k6 run loadtest/holds.js"
+    "loadtest": "k6 run loadtest/holds.js",
+    "test": "vitest run tests/unit",
+    "test:integration": "vitest run tests/integration",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@react-email/components": "^1.0.12",
@@ -74,8 +77,9 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@playwright/test": "^1.64.0",
     "@tailwindcss/postcss": "^4",
-    "@types/node": "^20",
+    "@types/node": "^24",
     "@types/qrcode": "^1.5.6",
     "@types/react": "^19",
     "@types/react-dom": "^19",
@@ -86,6 +90,7 @@
     "simple-icons": "^16.35.0",
     "tailwindcss": "^4",
     "tsx": "^4.23.12",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^5.0.4"
   }
 }

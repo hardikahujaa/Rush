@@ -3136,13 +3136,101 @@ its default pool size, confirming the T42 experiment left nothing behind.
 
 ---
 
-### ☐ T43 🟡 — Unit and E2E tests
+### ☑ T43 🟡 — Unit and E2E tests
 
 **Prompt:**
 
 > Set up Vitest and write unit tests for: hold expiry logic, QR signature generation and verification, and price calculation. Then set up Playwright and write one E2E test covering the full path — sign up, browse events, select seats, hold, checkout with the Stripe test card, and see the success page.
 
 **Commit:** `test: unit and e2e tests`
+
+**Done.** `vitest.config.mts`, `tests/unit/{qr,ticket-crypto,pricing}.test.ts`
+(20 tests), `tests/integration/hold-expiry.test.ts` (3 tests), `src/lib/pricing.ts`,
+`playwright.config.ts`, `e2e/{fixture,global-setup,global-teardown,purchase-flow.spec}.ts`
+(1 E2E test). Full methodology and every finding below in `README.md`'s
+"Testing (T43)" section.
+
+**ONE DESIGN CALL, MADE DELIBERATELY RATHER THAN DEFAULTED INTO.** "Hold
+expiry logic" is not a pure function — it's the database invariant
+*"`released_at IS NULL AND expires_at > now()`"*, compared against
+**Postgres's own clock**. Reimplementing that comparison in JavaScript and
+unit-testing the reimplementation would prove nothing about the real SQL in
+`src/db/queries/availability.ts`. So it became a narrow **integration** test
+against the real dev Supabase DB instead — same database every `scripts/*.ts`
+test already uses, just with `expect()` instead of `console.log`. QR
+signing/verification and price calculation genuinely are pure functions and
+got real, DB-free unit tests.
+
+**PRICE CALCULATION GOT A SMALL, REAL REFACTOR, NOT JUST A TEST.**
+`createHold`, `getActiveHoldsForUser` and `createPendingOrder` each had their
+own identical `.reduce((sum, item) => sum + item.priceCents, 0)`. Pulled into
+one `calculateTotalCents()` in `src/lib/pricing.ts` — deduplication the test
+needed in order to test anything at all, not a speculative abstraction.
+Confirmed behavior-preserving by re-running the existing regression suite
+(below) after the change, not just by typechecking.
+
+**A REAL GOTCHA, HIT IMMEDIATELY: `server-only` THROWS UNDER VITEST BY
+DEFAULT.** Every query module starts with `import "server-only"`, whose
+export map resolves to an unconditionally-throwing `index.js` unless resolved
+under the `react-server` condition — the same reason every `tsx` script in
+`package.json` already runs with `--conditions=react-server`. Setting
+`resolve.conditions` in `vitest.config.mts` does **not** fix this: Vitest
+externalizes `node_modules` packages by default, which bypasses Vite's own
+resolver (and its `conditions` setting) for them entirely. Fixed with a
+straight alias to an empty stub (`tests/stubs/server-only.ts`) instead.
+
+**THE E2E TEST IS REAL END-TO-END — NOTHING MOCKED, MATCHING T20/T21/T42'S
+OWN STANDARD.** Sign up → browse (`/events?q=`) → select a seat → hold →
+real Stripe Checkout with `4242 4242 4242 4242` → the success page, confirmed
+paid by the **actual webhook**, not a stubbed response. Needs `stripe listen
+--forward-to localhost:3000/api/webhooks/stripe` running in a separate
+terminal — stated plainly as a precondition, same as T42's T05 blocker,
+rather than silently assumed or faked. This also means the test is local-only
+for now: a CI job (future T44) has no `stripe listen` session and therefore
+no webhook secret to verify against.
+
+**THREE REAL BUGS CAUGHT BY RUNNING IT, NOT BY GUESSING SELECTORS:**
+
+1. `/available/i` as a seat-button matcher also matches `"...on hold,
+   un`**`available`**`"` — a disabled seat held over from a previous run
+   satisfied the regex and the test tried to click it, then waited the full
+   actionability timeout for a disabled button to become clickable. Fixed by
+   anchoring on `/, available$/i`, the exact suffix `SeatButton`'s label
+   always ends with in the genuinely-free case only.
+2. `SuccessView`'s confirmed heading (`"You're going."`) is
+   `aria-hidden="true"` **on purpose** — the paid state is announced to
+   assistive tech once, through a sibling `role="status"` live region,
+   instead of twice. `getByRole("heading", ...)` can never find it, by
+   design; the payment had actually already succeeded both times this failed
+   the test. Fixed by asserting on the status region's text instead.
+3. Playwright runs `globalSetup` and `globalTeardown` in the **same Node
+   process**. `src/db/index.ts` caches its connection on `globalThis` for
+   Next's dev-mode hot reload — closing that shared connection at the end of
+   setup handed teardown an already-ended connection object on its next
+   `import`, not a fresh one. Fixed by giving the E2E fixtures their own
+   connection in `e2e/fixture.ts`, opened and closed within each call,
+   decoupled from `src/db`'s app singleton (which also surfaced a second,
+   real bug: a completed purchase leaves a real `orders` row, and
+   `orders.event_id → events` is `restrict`, so teardown has to delete the
+   order before the event — not something the dedicated-fixture-event
+   pattern needed to handle before an E2E test actually paid for something).
+
+**NOT CHASED FURTHER, AND STATED PLAINLY RATHER THAN HIDDEN.** A passing E2E
+run still ends with `Assertion failed: !(handle->flags & UV_HANDLE_CLOSING),
+file src\win\async.c, line 94` on this Windows machine, *after* Playwright has
+already printed `1 passed`. Confirmed not caused by this project's code:
+persists with the DB connection fully isolated and closed, and does not occur
+on a trivial spec under the identical config — it tracks with this test's
+longer, cross-origin (`checkout.stripe.com`) navigation, not anything
+`purchase-flow.spec.ts` does. Reads as an upstream Node/Playwright-on-Windows
+native teardown quirk; the test result itself is unaffected.
+
+**Regression:** `typecheck` · `lint` green; `npm test` (20/20) and
+`npm run test:integration` (3/3, against the real DB, fixture rows confirmed
+cleaned up) green; the pre-existing suite re-run after the `pricing.ts`
+extraction — hold 20 / expiry 18 / release 18 / checkout 24 / webhook 50 (130
+checks) — all still green, confirming the refactor changed nothing it
+shouldn't have.
 
 ---
 
@@ -3243,7 +3331,7 @@ Grab a domain (free with the GitHub Student Pack) and point it at Vercel.
 | 9 · Waiting room | T34–T35 | ☑ |
 | 10 · Dashboard | T36–T38 | ☑ |
 | 11 · Design | T39–T41 | ☑ |
-| 12 · Proof | T42–T45 | T42 ☑ · T43–T45 ☐ |
+| 12 · Proof | T42–T45 | T42 ☑ · T43 ☑ · T44–T45 ☐ |
 | 13 · Ship | T46–T50 | ☐ |
 
 **51 tasks.** At 2 per session, that's roughly 26 sessions — comfortably inside a month with buffer for the days something breaks.

@@ -10,6 +10,7 @@ import {
   seatIsSold,
 } from "@/db/queries/availability";
 import { events, holds, seats, sections } from "@/db/schema";
+import { calculateTotalCents } from "@/lib/pricing";
 import { MAX_SEATS_PER_USER } from "@/lib/validation/holds";
 
 /** How long a buyer gets to reach checkout before the seats go back on sale. */
@@ -357,7 +358,7 @@ export async function createHold({
         (soonest, row) => (row.expiresAt < soonest ? row.expiresAt : soonest),
         expiresAt,
       ),
-      totalCents: detail.reduce((sum, row) => sum + row.priceCents, 0),
+      totalCents: calculateTotalCents(detail),
       replayed: toInsert.length === 0,
     };
   });
@@ -433,7 +434,7 @@ export async function getActiveHoldsForUser(
       (soonest, row) => (row.expiresAt < soonest ? row.expiresAt : soonest),
       rows[0].expiresAt,
     ),
-    totalCents: rows.reduce((sum, row) => sum + row.priceCents, 0),
+    totalCents: calculateTotalCents(rows),
     /* Nothing was created by reading. */
     replayed: true,
   };

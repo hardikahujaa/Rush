@@ -15,6 +15,7 @@ import {
   users,
   venues,
 } from "@/db/schema";
+import { calculateTotalCents } from "@/lib/pricing";
 
 /**
  * Stripe's own floor, not a number we picked: `Checkout.Session.expires_at`
@@ -212,7 +213,7 @@ export async function createPendingOrder({
         ),
       );
 
-    const totalCents = lineItems.reduce((sum, item) => sum + item.priceCents, 0);
+    const totalCents = calculateTotalCents(lineItems);
 
     const eventRows = await tx
       .select({ title: events.title })
