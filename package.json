@@ -40,7 +40,6 @@
     "race-test": "tsx --conditions=react-server --env-file=.env.local scripts/race-test.ts"
   },
   "dependencies": {
-    "@gsap/react": "^2.1.2",
     "@react-email/components": "^1.0.12",
     "@supabase/ssr": "^0.12.5",
     "@supabase/supabase-js": "^2.112.4",
@@ -53,7 +52,6 @@
     "clsx": "^2.1.1",
     "drizzle-orm": "^0.45.2",
     "framer-motion": "^13.1.1",
-    "gsap": "^3.15.0",
     "lucide-react": "^1.34.0",
     "next": "16.3.2",
     "postgres": "^3.4.9",
@@ -81,6 +79,7 @@
     "drizzle-kit": "^0.31.10",
     "eslint": "^9",
     "eslint-config-next": "16.3.2",
+    "simple-icons": "^16.35.0",
     "tailwindcss": "^4",
     "tsx": "^4.23.12",
     "typescript": "^5"

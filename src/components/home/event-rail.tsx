@@ -2,6 +2,7 @@ import Link from "next/link";
 import { ArrowRight } from "lucide-react";
 
 import { EventCard, type EventCardData } from "@/components/home/event-card";
+import { Reveal } from "@/components/home/reveal";
 import { cn } from "@/lib/utils";
 
 /**
@@ -77,12 +78,13 @@ export function EventRail({
             "md:grid md:snap-none md:grid-cols-2 md:overflow-visible lg:grid-cols-4",
           )}
         >
-          {events.map((event) => (
-            <EventCard
-              key={event.id}
-              event={event}
-              className="w-[78vw] shrink-0 snap-start sm:w-[20rem] md:w-auto"
-            />
+          {events.map((event, index) => (
+            <Reveal key={event.id} delay={Math.min(index, 4) * 0.06}>
+              <EventCard
+                event={event}
+                className="w-[78vw] shrink-0 snap-start sm:w-[20rem] md:w-auto"
+              />
+            </Reveal>
           ))}
         </div>
       </div>

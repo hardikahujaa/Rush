@@ -2,8 +2,9 @@ import Link from "next/link";
 import { CalendarClock } from "lucide-react";
 
 import { Footer } from "@/components/layout/footer/footer";
+import { EngineeredForScale } from "@/components/home/engineered-for-scale";
 import { EventRail } from "@/components/home/event-rail";
-import { Hero } from "@/components/home/hero";
+import { SpotlightHero } from "@/components/home/spotlight-hero";
 import { getEventCards } from "@/db/queries/events";
 
 /**
@@ -49,7 +50,7 @@ export default async function HomePage() {
 
   return (
     <>
-      <Hero />
+      <SpotlightHero />
 
       {/* Each rail renders only when it has rows. A headed rail with nothing
           under it looks like a failed fetch, which is precisely the impression
@@ -104,6 +105,8 @@ export default async function HomePage() {
           </div>
         </section>
       )}
+
+      <EngineeredForScale />
 
       <Footer />
     </>

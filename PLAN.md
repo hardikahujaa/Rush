@@ -2655,7 +2655,7 @@ production-scale (not synthetically padded) database.
 
 ## PHASE 11 — Design & animation
 
-### ☐ T39 🔴 — Landing page
+### ☑ T39 🔴 — Landing page
 
 Browse **Magic UI**, **Aceternity UI**, and **React Bits** first. Pick a hero, a bento grid, and a marquee you like.
 
@@ -2664,6 +2664,120 @@ Browse **Magic UI**, **Aceternity UI**, and **React Bits** first. Pick a hero, a
 > Build the landing page `/`. Hero with an animated gradient background and staggered text reveal, a live "next drop" countdown, a bento grid of featured events, a scroll-triggered "how it works" section, and a footer. I want to use [paste the component code you picked] — integrate it properly with our theme.
 
 **Commit:** `feat: landing page`
+
+**Done.** `/` rebuilt: a Spotlight-lit hero with a word-staggered headline and
+a ShimmerButton CTA, scroll-revealed event rails (real Postgres data,
+unchanged from T17), and an "Engineered for Scale" Bento Grid + tech-stack
+marquee. Five components pulled from the Aceternity and Magic UI shadcn
+registries, one dropped before it shipped, two dependencies added and then
+one of them removed again once it proved unnecessary.
+
+**THE INSTALL, AS ACTUALLY RUN.** `components.json` gained two registry
+entries (`@aceternity`, `@magicui`); `npx shadcn@latest add` pulled
+`spotlight-new`, `hover-border-gradient`, `bento-grid`, `shimmer-button`,
+`marquee`. The CLI's own "installing dependencies" step added `motion`
+(the renamed `framer-motion` package the two Aceternity files import from)
+and `@tabler/icons-react` — both removed again: the two `motion/react`
+imports were rewritten to this project's existing `framer-motion ^13.1.1`
+rather than run two copies of the same library, and `@tabler/icons-react`
+turned out to be imported by neither installed file, so it was dead weight
+from the start.
+
+**HOVER BORDER GRADIENT WAS INSTALLED AND THEN DELETED.** The brief's own
+phrasing — "ideally using Aceternity's Hover Border Gradient **or** Magic
+UI's Shimmer Button" — was an either/or, and reading the actual installed
+source settled which: `HoverBorderGradient` runs a `setInterval` rotating
+its gradient direction *forever*, even when nobody is hovering it, with no
+`prefers-reduced-motion` check anywhere in the file — the one motion
+addition in this entire project that would have shipped without the gate
+every other one has. `ShimmerButton` is pure CSS (no JS timer, no client
+boundary of its own) and its two `animate-*` classes take a `motion-safe:`
+prefix trivially. Kept the better-engineered one; deleted the installed
+file for the one that wasn't used.
+
+**THE CTA NEEDED A FORK, NOT A WRAP.** `ShimmerButton` hardcodes a `<button>`
+root with no polymorphic `as` prop. Nesting it inside `next/link`'s `<a>`
+would be two interactive elements, one inside the other — invalid HTML, and
+ambiguous to a screen reader about which one actually navigates. Rather than
+either nest them or give up the shimmer, the hero reproduces the installed
+component's own internal markup — the spark container, the highlight glow,
+the same CSS custom properties — directly under `<Link href="/events">`, so
+the anchor itself is the shimmering surface. The installed
+`shimmer-button.tsx` file is untouched; only this one call site needed an
+anchor instead of a button.
+
+**A 5MB MODULE WAS KEPT OUT OF THE CLIENT BUNDLE, MEASURED, NOT ASSUMED.**
+`simple-icons` (for the Next.js/Postgres/Redis/Stripe/Resend marks in the
+"Built with" strip) ships one ESM file of ~3,200 named `const` exports,
+~5MB on disk. Importing five names from it and trusting Turbopack to
+tree-shake the other 3,195 was the obvious path and the one not taken:
+`scripts/extract-stack-icons.mjs` pulls exactly the five `{title, path}`
+pairs needed into a static `stack-icons.ts` (~2KB) at build-prep time, and
+`simple-icons` moved to `devDependencies` — it is never imported by anything
+that ships. Checked after the production build, not assumed: `grep` across
+every emitted chunk in `.next/static/chunks` for `siNextdotjs`/`simple-icons`
+returns zero matches.
+
+**THE GSAP HERO IS GONE, NOT KEPT ALONGSIDE.** The replaced component was a
+real, carefully engineered pinned 3D ScrollTrigger animation with its own
+`matchMedia` reduced-motion path — not a placeholder. Flagged explicitly
+before building (per the approved plan) and confirmed by the "replace the
+functional T17 homepage" framing: deleted outright, along with `gsap` and
+`@gsap/react` from `package.json` once `grep -rl gsap src/` came back
+empty — the whole dependency existed for exactly that one component.
+
+**Decisions worth recording:**
+
+1. **The Spotlight's champagne hue (38°) is derived from this project's own
+   tokens, not picked independently.** `--gold` is `#F59E0B` and
+   `--gold-champagne` is `#FFE4B5` — both already hue ≈38° in HSL, computed
+   from the hex values documented in `globals.css`'s own comments. The
+   installed `spotlight-new.tsx` ships a blue `hsla(210, …)` default; the
+   three gradient props are overridden at the call site, not in the pristine
+   installed file, so a future `npx shadcn diff` stays meaningful.
+2. **The scroll-reveal is the thinnest possible client boundary.** `Reveal`
+   wraps one `<EventCard>` at a time with `initial={{opacity:0,y:20}}` /
+   `whileInView` / `once:true`; `EventRail` and `EventCard` themselves stay
+   server components exactly as T17 left them. Making the rail itself a
+   client component would have dragged the `getEventCards()` data path into
+   the client bundle for an effect that only needs to touch one wrapper.
+   Stagger is capped at `Math.min(index, 4) * 0.06s` so an 8-card rail
+   doesn't delay its last card by nearly half a second.
+3. **The four Bento Grid panels name real, already-shipped mechanisms with
+   their own proof, not adjectives** — row-level locking (T20/T21, the race
+   test's 1-winner-49-conflicts result), the Redis sorted-set queue (T34's
+   INCR-scored, atomically-admitted line), stateless HMAC QR tickets (T30),
+   and React Server Components (true of most of this app's own pages). Same
+   standing rule this project wrote down for itself at T35: nothing on this
+   page claims work that isn't happening.
+4. **The marquee logos are monochrome, not each brand's real colour.**
+   `simple-icons`' Next.js mark is literal black — invisible on a near-black
+   background. One soft `currentColor` tone that brightens individually on
+   hover fits Obsidian & Champagne; five mismatched brand colours would not.
+5. **Neither installed `marquee.tsx` nor the original `spotlight-new.tsx`
+   had any `prefers-reduced-motion` handling of their own.** Both stayed
+   pristine; the gating happens at the call site instead —
+   `StackMarquee` checks `useReducedMotion()` itself and swaps to a static
+   wrapped row rather than hand-editing the installed file.
+
+**Not verified by me: the rendered appearance.** Same position as every
+prior UI task this session — the Chrome extension was not connected. What
+*is* verified: the full page fetched over real HTTP and checked
+structurally — the champagne `hsla(38, …)` gradients present (not the
+installed default blue), the headline's six words each in their own
+correctly-ordered span with the right SSR-hidden initial style (no
+hydration-mismatch risk), the CTA rendering exactly once with the right
+`--shimmer-color`, all five stack logos appearing twelve times each (3
+attributes × 4 marquee repeats — the expected count, not a duplication
+bug), zero trace of the deleted GSAP hero in the output, and zero bytes of
+`simple-icons` in any built client chunk.
+
+**Regression:** hold 20 / expiry 18 / release 18 / checkout 24 / webhook 50 /
+success 18 / ticket 36 / scan 31 / email 37 / realtime 21 / queue 79 /
+queue-ui 48 / analytics 27 / dashboard 22, the T21 race test (1 winner, 49
+conflicts, 0 errors, zero oversells), `check-seed` clean, `typecheck` ·
+`lint` · `build` green.
+
 
 ---
 
@@ -2811,7 +2925,7 @@ Grab a domain (free with the GitHub Student Pack) and point it at Vercel.
 | 8 · Realtime | T33 | ☑ |
 | 9 · Waiting room | T34–T35 | ☑ |
 | 10 · Dashboard | T36–T38 | ☑ |
-| 11 · Design | T39–T41 | ☐ |
+| 11 · Design | T39–T41 | T39 ☑ · T40–T41 ☐ |
 | 12 · Proof | T42–T45 | ☐ |
 | 13 · Ship | T46–T50 | ☐ |
 
