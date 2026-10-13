@@ -1,4 +1,6 @@
 # Rush
+![CI](https://github.com/hardikahujaa/Rush/actions/workflows/ci.yml/badge.svg)
+
 High-demand ticket drop platform.
 
 ## Query performance (T38)

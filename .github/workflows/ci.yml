@@ -1,0 +1,37 @@
+name: CI
+
+# Push is scoped to `main` rather than every branch, deliberately. A push to
+# a branch that already has an open PR fires BOTH the `push` and
+# `pull_request` events for the identical commit - running this whole job
+# twice for no reason. `pull_request` (left unscoped, so it covers a PR
+# against any branch) plus push-to-main covers "every push and every pull
+# request" without that duplication.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run typecheck
+
+      - run: npm run lint
+
+      # Only the unit suite (`tests/unit/**`) - never `test:integration` or
+      # `test:e2e`. Both need `.env.local` secrets (a real dev Supabase DB,
+      # a live `stripe listen` session) that only exist on a developer's
+      # machine; running them here would mean either leaking secrets into
+      # Actions or a red check for reasons that have nothing to do with the
+      # code. `tests/unit/setup.ts` supplies every env var this suite needs.
+      - run: npm run test
