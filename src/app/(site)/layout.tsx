@@ -1,4 +1,5 @@
 import { VoidFlashlight } from "@/components/backdrop/void-flashlight";
+import { DemoResetButton } from "@/components/demo/demo-reset-button";
 import { Navbar } from "@/components/layout/navbar/navbar";
 
 /**
@@ -32,6 +33,12 @@ export default function SiteLayout({
       <VoidFlashlight />
       <Navbar />
       <div className="flex-1">{children}</div>
+      {/* Organizer-only; the component itself returns null for everyone
+          else - see demo-reset-button.tsx. Lives in THIS layout, not the
+          root one, because it needs getCurrentUser() either way and the
+          Navbar right above it already pays for that lookup on every page
+          this layout wraps - (auth)'s login/signup pages do not. */}
+      <DemoResetButton />
     </div>
   );
 }

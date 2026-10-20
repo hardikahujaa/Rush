@@ -454,7 +454,9 @@ export async function getActiveHoldsForUser(
  * Guarded by `seatIsSold` so a seat with an order line can never be flipped
  * back to available by a stray hold row. Sold is permanent; held is not.
  */
-async function repairSeatStatus(
+/** Exported for `demo.ts` (T47), which repairs the cache after the same kind
+ *  of bulk status change this file already makes for a release. */
+export async function repairSeatStatus(
   tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
   seatIds: string[],
 ): Promise<number> {

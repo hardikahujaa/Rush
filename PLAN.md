@@ -3390,9 +3390,37 @@ In Stripe, create a webhook endpoint pointing at `https://your-app.vercel.app/ap
 
 **Verify:** complete a real test purchase on the live URL.
 
+**Blocked — this task is dashboard clicks, not code, and this session has no
+login to either dashboard.** No `.vercel/` project link exists locally (no
+`vercel` CLI is even installed), so there is no evidence this repo has ever
+been deployed — T05 ("Deploy to Vercel") is also still unchecked, and T46
+cannot happen before T05 does: there is no live URL yet for a Stripe webhook
+to point at. The Stripe CLI IS authenticated in this environment (a "Student
+sandbox" test-mode account), so creating the webhook endpoint itself is
+possible in principle — but not before a Vercel deploy exists to name as its
+target, and "log into Vercel" is exactly the kind of account action this
+session was not given credentials for and should not attempt on its own.
+
+**What to do, once you're at a keyboard:**
+1. `T05` — vercel.com → Add New → Project → import this repo. Takes the
+   default settings; the first deploy will likely fail or serve a broken app,
+   because no environment variables exist on Vercel yet. That's expected.
+2. Vercel dashboard → Settings → Environment Variables → add everything
+   currently in `.env.local` (check it against `.env.example`'s structure,
+   which lists every variable this app reads) for **Production** and
+   **Preview**. Redeploy.
+3. Stripe dashboard → Developers → Webhooks → Add endpoint →
+   `https://<your-vercel-url>/api/webhooks/stripe`, events
+   `checkout.session.completed` and `checkout.session.expired` (and the two
+   async ones the handler already wires for, per T28's own note on why). Copy
+   **that** signing secret — not the one `stripe listen` gave you locally —
+   into Vercel's `STRIPE_WEBHOOK_SECRET`.
+4. Complete one real test purchase (card `4242 4242 4242 4242`) against the
+   live URL, per the task's own verification step.
+
 ---
 
-### ☐ T47 🟢 — Demo mode
+### ☑ T47 🟢 — Demo mode
 
 **Prompt:**
 
@@ -3401,6 +3429,84 @@ In Stripe, create a webhook endpoint pointing at `https://your-app.vercel.app/ap
 **Commit:** `feat: demo reset`
 
 > This will save your presentation. Trust me.
+
+**Done, statically verified only — `typecheck`, `lint`, `test` (20/20) and
+`build` all pass, but nothing here has run against a real database yet.**
+Supabase's free project is paused (CLAUDE.md's own warning: idle ~1 week and
+it sleeps) and waking it needs the dashboard, which needs a browser login this
+session does not have. `npm run demo-reset-test` is written and ready, but
+**unrun** — see "What's still open" at the end of this session's work for what
+to do first.
+
+**"Reset" does not mean `db:seed`.** `db:seed` deletes every venue, event and
+section and rebuilds from nothing — which would also erase the extra catalogue
+`seed-events.ts` added for T17 and anyone who actually signed up. That is not
+what a presenter means mid-rehearsal by "reset the demo"; it is what you run
+once, before the demo exists. `src/db/queries/demo.ts`'s `resetDemoActivity()`
+resets ACTIVITY only — every real order (and, via `onDelete: cascade`, its
+order_items and tickets) plus every live hold — and leaves the seeded
+catalogue and every account untouched.
+
+**The seed/real boundary already existed; this just reads it.** `seed.ts`
+stamps every baseline order it creates with `stripeSessionId:
+cs_test_seed_${randomUUID()}` specifically so something downstream could tell
+seed data from a genuine checkout without a new column. A real session id
+never has that prefix, Stripe issues it. So "every order that is not seed
+data" is exactly "every order a live checkout produced" — rehearsal or real
+buyer, it does not matter which; both get reset, and only the seeded baseline
+survives, which is what keeps the dashboard's T36/T37 demo numbers intact
+across resets instead of flattening to zero every time. `holds` needs no such
+filter: `seed.ts` never writes a hold row at all (its presold seats go
+straight to `orders`, bypassing the hold mechanism — see its own comment on
+why), so every hold in the table came from a real `/api/holds` call and
+releasing all of them is always safe.
+
+**Two ways in, because the brief asks for both a secret and a button that
+needs no secret.** `POST /api/demo/reset` accepts EITHER a verified session
+with role `organizer` (what the floating button sends) OR
+`Authorization: Bearer <DEMO_RESET_SECRET>` (typed from a terminal, no browser
+needed, right before walking on stage) — checked fail-closed and
+constant-time, the identical shape `/api/cron/cleanup` already uses for
+`CRON_SECRET`: an unset secret authenticates nobody, never the literal string
+`"Bearer undefined"`.
+
+**Deliberately destructive, deliberately not environment-gated.** This hard-
+deletes real orders; "without the seats already being sold" means gone, not
+soft-released. No `NODE_ENV !== "production"` guard was added, because for a
+project whose only deployment target IS the demo, production is exactly where
+a presenter needs this to work. The secret and the role check are the
+protection the brief asked for.
+
+**Stated plainly, because it matters more than any comment buries it:** the
+reset has **no event filter** — it clears every real order in the whole
+database, not one event at a time. That is what "re-run my demo" means for an
+app that has more than one droppable event (the waiting room's scheduled drop
+included), not a bug to narrow later.
+
+**The button:** `src/components/demo/demo-reset-button.tsx` is an async
+Server Component that calls `getCurrentUser()` and renders nothing for
+anyone who isn't an organizer — the check and the query behind it never reach
+a buyer's bundle, unlike a client-side `if` that would still ship the button
+and let `fetch` reach the endpoint directly. It lives in `(site)/layout.tsx`,
+next to `Navbar`, not the root layout — `Navbar` already pays for the same
+cached `getCurrentUser()` call on every page that layout wraps, so this adds
+no second query; the root layout would have charged `/login` and `/signup`
+for a lookup they have no use for. The client half
+(`demo-reset-button-client.tsx`) reuses the exact arm-four-seconds-then-
+disarm confirmation `hold-banner.tsx` already built for "Release seats" in
+T25, raised to cover a bigger blast radius: no modal stealing focus from
+whatever the presenter is demonstrating, but still no single accidental click
+that deletes every order in the database.
+
+**Not done, and deliberately left for a future session:** actually running
+`demo-reset-test.ts` against a live database, and therefore not having
+first-hand proof `resetDemoActivity()`'s SQL is correct beyond static types
+and a close reading. The script itself documents why it cannot claim
+"safe on real data" the way `release-test.ts` does — the function it tests has
+no event filter by design, so running the test also clears whatever other
+real activity already exists in whatever database it points at. That is
+expected, not a test bug, but it is one more reason this needs a real run,
+with real output, before anyone trusts it in front of an audience.
 
 ---
 
@@ -3457,7 +3563,7 @@ Grab a domain (free with the GitHub Student Pack) and point it at Vercel.
 | 10 · Dashboard | T36–T38 | ☑ |
 | 11 · Design | T39–T41 | ☑ |
 | 12 · Proof | T42–T45 | T42 ☑ · T43 ☑ · T44 ☐ (pushed, awaiting a GitHub login to confirm the check) · T45 ☑ |
-| 13 · Ship | T46–T50 | ☐ |
+| 13 · Ship | T46–T50 | T46 ☐ (needs a Vercel/Stripe dashboard login) · T47 ☑ · T48–T50 ☐ (manual by request) |
 
 **51 tasks.** At 2 per session, that's roughly 26 sessions — comfortably inside a month with buffer for the days something breaks.
 
