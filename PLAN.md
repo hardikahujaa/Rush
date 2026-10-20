@@ -157,7 +157,7 @@ Then, **prompt:**
 
 ## PHASE 2 — Database
 
-### ☐ T08 🟡 — Create the Supabase project
+### ☑ T08 🟡 — Create the Supabase project
 
 1. supabase.com → New Project. Name it `rush`. **Save the database password somewhere** — you cannot recover it.
 2. Region: pick the one closest to India (Mumbai / Singapore).
@@ -174,6 +174,22 @@ SUPABASE_SERVICE_ROLE_KEY="eyJ..."
 ```
 
 **Verify:** `.env.local` is listed in `.gitignore`. Check this. If you commit secrets to GitHub, they're public forever.
+
+**Checkbox was stale, not the task.** This had never been ticked despite
+T09–T43 all depending on a working Supabase project existing — there is no
+way the 288-seats-per-event seed data, the migrations, or 50 real Supabase
+Auth users in T21's race test could exist otherwise. Confirmed properly
+rather than assumed: `.env.local` carries `DATABASE_URL`,
+`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` and
+`SUPABASE_SERVICE_ROLE_KEY`, all present; `.env.local` is listed in
+`.gitignore` (`git check-ignore -v .env.local` confirms it), satisfying the
+task's own verify step. What's actually wrong is unrelated to T08: a direct
+connection attempt right now fails with `Tenant or user not found`, which is
+exactly the symptom "Things that will bite you" already warns about —
+**Supabase free projects pause after about a week idle.** That blocks every
+DB-dependent script and test in this session (see "What's still open" at the
+end), but it is a dashboard click to fix, not evidence the project was never
+created.
 
 ---
 
@@ -3550,12 +3566,12 @@ Grab a domain (free with the GitHub Student Pack) and point it at Vercel.
 
 | Phase | Tasks | Done |
 |---|---|---|
-| 0 · Setup | T00–T02 | ☐ |
-| 1 · Foundation | T03–T07 | ☐ |
-| 2 · Database | T08–T12 | ☐ |
-| 3 · Auth | T13–T16 | ☐ |
+| 0 · Setup | T00–T02 | T00–T01 ☑ · T02 ☐ (a manual "try the commands yourself" exercise) |
+| 1 · Foundation | T03–T07 | T03–T04 ☑ · T05 ☐ (same Vercel-login block as T46) · T06–T07 ☑ |
+| 2 · Database | T08–T12 | ☑ |
+| 3 · Auth | T13–T16 | ☑ |
 | 4 · Public pages | T17–T18 | ☑ |
-| 5 · **Booking engine** | T19–T25 | ☐ |
+| 5 · **Booking engine** | T19–T25 | ☑ |
 | 6 · Payments | T26–T29 | ☑ |
 | 7 · Tickets & check-in | T30–T32 | ☑ |
 | 8 · Realtime | T33 | ☑ |
