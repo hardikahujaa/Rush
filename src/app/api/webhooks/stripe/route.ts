@@ -1,4 +1,5 @@
 import { NextResponse, after } from "next/server";
+import * as Sentry from "@sentry/nextjs";
 import type Stripe from "stripe";
 
 import { getOrderForReceipt } from "@/db/queries/orders";
@@ -63,10 +64,18 @@ import { checkoutMetadataSchema } from "@/lib/validation/webhook";
  * A webhook that quietly returns 200 on a payment it could not fulfil is
  * indistinguishable from one that worked, which is the worst possible
  * combination: the customer has been charged and nothing anywhere says so.
- * These four lines are the alert surface until Sentry lands in T45.
+ * `console.error` was the only alert surface before T45 - a human had to be
+ * reading Vercel's logs at the right moment. `Sentry.captureMessage` is what
+ * turns that into a page, which is the whole point of REFUND_REQUIRED_SEAT_CONFLICT
+ * below: money taken, seat undeliverable, and nobody watching is the failure
+ * mode that actually costs this project money.
  */
 function logIncident(kind: string, detail: Record<string, unknown>) {
   console.error(`[stripe-webhook] INCIDENT ${kind}`, JSON.stringify(detail));
+  Sentry.captureMessage(`stripe-webhook INCIDENT ${kind}`, {
+    level: "error",
+    extra: detail,
+  });
 }
 
 /* ── the raw body ───────────────────────────────────────────────────────── */

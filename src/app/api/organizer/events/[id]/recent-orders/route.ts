@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 
 import { getRecentOrders } from "@/db/queries/analytics";
 import { getCurrentUser } from "@/lib/auth";
+
+/** `events.id` is a uuid column; see the identical note in orders/[id]/status. */
+const eventIdSchema = z.uuid();
 
 /**
  * GET /api/organizer/events/[id]/recent-orders - the dashboard's one polled
@@ -47,6 +51,11 @@ export async function GET(
 ) {
   const { id: eventId } = await params;
 
+  const parsedId = eventIdSchema.safeParse(eventId);
+  if (!parsedId.success) {
+    return fail(400, "VALIDATION_ERROR", "Event id must be a uuid.");
+  }
+
   const user = await getCurrentUser();
   if (!user) return fail(401, "UNAUTHENTICATED", "Sign in to view this dashboard.");
   if (user.role !== "organizer") {
@@ -56,7 +65,7 @@ export async function GET(
   const limitParam = new URL(request.url).searchParams.get("limit");
   const limit = Math.min(Math.max(Number(limitParam) || 10, 1), 25);
 
-  const orders = await getRecentOrders(eventId, user.id, limit);
+  const orders = await getRecentOrders(parsedId.data, user.id, limit);
   if (!orders) {
     return fail(404, "NOT_FOUND", "No such event.");
   }

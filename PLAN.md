@@ -3243,15 +3243,140 @@ shouldn't have.
 **Verify:** open a PR and watch the check go green.
 **Commit:** `ci: github actions pipeline`
 
+**Pushed, not yet confirmed green — the one task in this list that genuinely
+needs a browser login.** `ci/verify-t44`'s HEAD is an empty commit opening a
+real PR against `main` for exactly this check, per the task's own verification
+step. `gh` is not authenticated in this environment (`gh auth login` was
+offered and declined to run unsupervised) and the repo is private, so
+`https://github.com/hardikahujaa/Rush/actions` 404s to an unauthenticated
+fetch — there is no way to read GitHub's own verdict from here.
+
+What **is** verified, directly: `.github/workflows/ci.yml` runs exactly three
+steps — `npm run typecheck`, `npm run lint`, `npm run test` — and all three
+were run locally, by hand, after every other change in this session (including
+the Next.js upgrade below), and all three are clean. `npm ci --dry-run` also
+confirms the lockfile matches `package.json`, which is the one way this step
+can fail that typecheck/lint/test can't catch on their own. This is the
+strongest evidence obtainable without GitHub access; it is not the same thing
+as watching the badge turn green. **Action needed from you:** open
+github.com/hardikahujaa/Rush/pulls (or run `gh auth login`), confirm the check
+passed, then tick this box and merge or close the branch.
+
 ---
 
-### ☐ T45 🟡 — Monitoring & security pass
+### ☑ T45 🟡 — Monitoring & security pass
 
 **Prompt:**
 
 > Add Sentry for error tracking and Vercel Analytics. Then audit the whole app for: any API route missing auth checks, any missing Zod validation, any place the service role key could leak to the client, and any user input rendered without escaping. Fix what you find and list what you fixed.
 
 **Commit:** `feat: monitoring and security fixes`
+
+**Done.** `npm run typecheck`, `lint`, `test` (20/20) and `build` all pass with the
+changes below; `npm run build` still prints `ƒ Proxy (Middleware)`.
+
+**THE AUDIT'S REAL FINDING WASN'T IN THIS APP'S CODE — IT WAS THE PINNED RUNTIME.**
+`npm audit --omit=dev` turned up a **critical, unauthenticated RCE in Next.js
+16.3.2** itself — the exact version this repo pinned (GHSA-p293-qw3h-jr36,
+Windows-hosted servers), alongside a second critical RCE in the Image
+Optimization API and six more high/critical CVEs (SSRF, cache poisoning,
+information disclosure). All were already present before this task touched
+anything; installing Sentry just happened to be what made `npm audit` look at
+the tree. Upgraded to **16.4.2** (the current patched stable, not a canary),
+exact-pinned — not `^16.4.2` — the same discipline the project already applies
+to Stripe, because AGENTS.md's own warning is that Next 16 point releases
+change behaviour out from under code written against an earlier one.
+`eslint-config-next` moved in lockstep, same exact-pin. Re-verified clean
+end to end (typecheck, lint, 20/20 unit, and a full `next build` confirming the
+proxy and all 27 routes still compile) rather than trusting the version bump.
+
+**A second, smaller finding cleared the rest of the list.** The remaining 21
+flagged packages (`proxy-addr` critical, `@modelcontextprotocol/sdk` high, plus
+the `braces`/`ts-morph`/`fast-glob`, `hono`, `qs`, `undici`, `ip-address`,
+`fast-uri` chain) all traced to one place: `shadcn` — the component-scaffolding
+CLI, never imported anywhere in `src/` or `scripts/` — was listed in
+`dependencies` instead of `devDependencies`. Moved it, exactly the
+classification `drizzle-kit` already had and the precedent T23 set for exactly
+this situation. `npm audit --omit=dev` now reports **zero** vulnerabilities;
+the dev-only chain is unchanged risk (not shipped, not reachable) and tracked
+rather than force-fixed. `sharp`, pulled in by `next` for `/_next/image`, was
+briefly flagged on 16.3.2 but cleared on its own after the upgrade — moot
+anyway, since nothing in this app imports `next/image`.
+
+**Sentry — wired, and genuinely optional, same posture as Redis.** No account
+exists for this project, so every init reads `SENTRY_DSN` /
+`NEXT_PUBLIC_SENTRY_DSN` and does nothing when it is unset — `Sentry.init()`
+with no DSN is a documented no-op, not a throw, the identical contract
+`redis.ts` already relies on. `src/instrumentation.ts` and
+`src/instrumentation-client.ts` sit in `src/`, not the repo root — resolved the
+same way as `proxy.ts`, and getting that wrong is the identical silent failure
+AGENTS.md warns about. `next.config.ts` wraps the config with
+`withSentryConfig` (imported from the build-time-only `@sentry/nextjs/config`
+subpath — it is not re-exported from the package root in this version);
+`org`/`project`/`authToken` are left unset, which makes the plugin skip the
+source-map upload step on its own rather than fail the build.
+
+Capture is added in exactly two places, not sprinkled through every
+`console.error` in the app:
+1. **`ErrorState`** (`src/components/layout/error-state.tsx`), the one
+   component thirteen of the app's fourteen `error.tsx` boundaries already
+   share (T41). One `useEffect` there reports every page-level crash instead
+   of patching thirteen call sites with the same line — the identical reasoning
+   T22 and T23 used for centralising a rule that must not drift.
+   `global-error.tsx` (the root-layout last resort, which deliberately shares
+   no components with the rest of the app) gets its own call for the same
+   reason.
+2. **The Stripe webhook's `logIncident`** — the function whose own comment
+   already said "these four lines are the alert surface until Sentry lands in
+   T45." Now a `captureMessage` alongside the `console.error`, so
+   `REFUND_REQUIRED_SEAT_CONFLICT` — money taken, seat undeliverable — pages
+   someone instead of waiting to be noticed in a log.
+
+**Vercel Analytics** — `<Analytics />` from `@vercel/analytics/next` in the
+root layout. No env var at all; it only sends anything when actually served by
+Vercel, so it is safe to render unconditionally in local dev.
+
+**The security audit, item by item:**
+
+- **Auth checks** — read every route under `src/app/api/`. All twelve are
+  correct: protected routes check `getCurrentUser()`/role before touching the
+  database, and the two deliberately public ones (`/api/webhooks/stripe` and
+  `/api/tickets/qr/[code]`) each carry a comment explaining why auth does not
+  apply there (Stripe cannot log in — the HMAC signature **is** the auth; the
+  QR image is fetched by email clients with no session, and the 128-bit HMAC
+  in the URL is the credential). No gap found.
+- **Service role key leakage** — grepped the whole of `src/` for
+  `SUPABASE_SERVICE_ROLE_KEY`. Zero matches. It is used in exactly one place in
+  the entire repo, `scripts/seed-load-test.ts`, a local-only script that never
+  ships. Nothing to fix.
+- **Unescaped user input** — grepped for `dangerouslySetInnerHTML`, `innerHTML`
+  and `__html`. Zero matches anywhere in `src/`. Every user-controlled string
+  (event titles, seat labels, buyer-facing copy) renders through JSX, which
+  escapes by construction, including in the email template. Nothing to fix.
+- **Missing Zod validation — the one real gap, and it was exactly where
+  CLAUDE.md's own rule predicts it would be.** Every route that takes a body
+  parses it with Zod before touching the database. Two routes that take their
+  id from the **URL path** instead did not: `GET /api/orders/[id]/status` and
+  `GET /api/organizer/events/[id]/recent-orders` both passed the raw path
+  segment straight into `eq(orders.id, …)` / `eq(events.id, …)`. Both columns
+  are `uuid`; a malformed id (not necessarily malicious — a stray trailing
+  slash is enough) reaches Postgres unchecked, which throws `invalid input
+  syntax for type uuid` with no `try/catch` around it in either handler — a
+  bare 500 instead of the honest 400 every other route in this app gives a bad
+  request. Fixed by adding `z.uuid().safeParse(id)` to both, returning
+  `400 VALIDATION_ERROR` before the query ever runs — the same shape of fix
+  `validation/queue.ts` already applies to `eventId` in the request body, just
+  never extended to a path param.
+
+**Deliberately not done:** rewrapping every route handler with
+`wrapApiHandlerWithSentry` — that helper is for the Pages Router specifically
+(its own doc comment says so); App Router route handlers are instrumented by
+`withSentryConfig`'s build-time wrapping plus the `onRequestError` hook in
+`instrumentation.ts`, so wrapping them by hand would be redundant. Also not
+done: touching the dozens of other `console.error`/`console.warn` calls across
+the app. T45 asked for monitoring and a targeted audit, not an app-wide rewrite
+of logging; the two capture points above are the ones with no other alert
+path, which is the bar that matters.
 
 ---
 
@@ -3331,7 +3456,7 @@ Grab a domain (free with the GitHub Student Pack) and point it at Vercel.
 | 9 · Waiting room | T34–T35 | ☑ |
 | 10 · Dashboard | T36–T38 | ☑ |
 | 11 · Design | T39–T41 | ☑ |
-| 12 · Proof | T42–T45 | T42 ☑ · T43 ☑ · T44–T45 ☐ |
+| 12 · Proof | T42–T45 | T42 ☑ · T43 ☑ · T44 ☐ (pushed, awaiting a GitHub login to confirm the check) · T45 ☑ |
 | 13 · Ship | T46–T50 | ☐ |
 
 **51 tasks.** At 2 per session, that's roughly 26 sessions — comfortably inside a month with buffer for the days something breaks.

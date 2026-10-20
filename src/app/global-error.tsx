@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+import * as Sentry from "@sentry/nextjs";
 
 /**
  * T41 — the LAST resort. Catches an error thrown in `app/layout.tsx` itself,
@@ -35,6 +36,7 @@ export default function GlobalError({
 }) {
   useEffect(() => {
     console.error("[global] root layout failed", error);
+    Sentry.captureException(error);
   }, [error]);
 
   return (

@@ -1,6 +1,8 @@
 "use client";
 
+import { useEffect } from "react";
 import Link from "next/link";
+import * as Sentry from "@sentry/nextjs";
 import { AlertTriangle, RotateCcw } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -51,6 +53,15 @@ export function ErrorState({
    *  already draws one, where this component's own card would double-box. */
   bare?: boolean;
 }) {
+  /* One effect, shared by every `error.tsx` that renders this card, rather
+     than thirteen copies of the same call - the exact drift T22 and T23 both
+     found when a rule was spelled out per-call-site instead of once. A
+     missing DSN makes this a no-op (see sentry.server.config.ts); it does not
+     need its own guard. */
+  useEffect(() => {
+    Sentry.captureException(error);
+  }, [error]);
+
   return (
     <div
       className={

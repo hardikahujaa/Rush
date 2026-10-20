@@ -1,7 +1,19 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 
 import { getOrderStatusForUser } from "@/db/queries/orders";
 import { getCurrentUser } from "@/lib/auth";
+
+/**
+ * `orders.id` is a uuid column. Without this check, a malformed id (a short
+ * string, a path-traversal attempt, anything non-uuid) reaches
+ * `eq(orders.id, orderId)` unchecked and Postgres throws `invalid input syntax
+ * for type uuid` - uncaught here, since this handler has no try/catch, which
+ * would surface as a bare 500 instead of the honest 400 every other route in
+ * this app gives a malformed request. CLAUDE.md's Zod-everything rule exists
+ * for exactly this gap.
+ */
+const orderIdSchema = z.uuid();
 
 /**
  * GET /api/orders/[id]/status - what the success page polls.
@@ -38,6 +50,14 @@ export async function GET(
   /* `params` is a Promise in Next.js 16 - synchronous access was removed. */
   const { id } = await context.params;
 
+  const parsedId = orderIdSchema.safeParse(id);
+  if (!parsedId.success) {
+    return NextResponse.json(
+      { error: { code: "VALIDATION_ERROR", message: "Order id must be a uuid." } },
+      { status: 400 },
+    );
+  }
+
   /* 401 rather than a redirect: this is polled by fetch(), which would follow
      a 307 and try to parse a login page as JSON. Same reasoning as /api/holds. */
   const user = await getCurrentUser();
@@ -51,7 +71,7 @@ export async function GET(
   /* Ownership lives in the query's WHERE clause, so "not found" and "not
      yours" are the same answer - see getOrderStatusForUser. 404 for both:
      a 403 would confirm that an order with this id exists. */
-  const order = await getOrderStatusForUser(id, user.id);
+  const order = await getOrderStatusForUser(parsedId.data, user.id);
   if (!order) {
     return NextResponse.json(
       { error: { code: "NOT_FOUND", message: "Order not found." } },
